@@ -290,6 +290,7 @@ def render(H, W, focal,
     if c2w is not None:
         # special case to render full image
         rays_o, rays_d = get_rays(H, W, focal, c2w)
+
     else:
         # use provided ray batch
         rays_o, rays_d = rays
@@ -305,6 +306,8 @@ def render(H, W, focal,
         # shape: [batch_size, 3]
         viewdirs = viewdirs / tf.linalg.norm(viewdirs, axis=-1, keepdims=True)
         viewdirs = tf.cast(tf.reshape(viewdirs, [-1, 3]), dtype=tf.float32)
+
+
 
     sh = rays_d.shape  # [..., 3]
     if ndc:
@@ -566,7 +569,7 @@ def config_parser():
                         help='frequency of weight ckpt saving')
     parser.add_argument("--i_testset", type=int, default=50000,
                         help='frequency of testset saving')
-    parser.add_argument("--i_video",   type=int, default=50000,
+    parser.add_argument("--i_video",   type=int, default=500000,
                         help='frequency of render_poses video saving')
 
     return parser
@@ -619,8 +622,8 @@ def train():
               render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
-        near = 2.
-        far = 6.
+        near = 4.
+        far = 16.
 
         if args.white_bkgd:
             images = images[..., :3]*images[..., -1:] + (1.-images[..., -1:])
@@ -925,4 +928,5 @@ def train():
 
 
 if __name__ == '__main__':
+    os.environ['CUDA_VISIBLE_DEVICES']='4,5'
     train()
