@@ -12,6 +12,8 @@ def get_position(ray_o, ray_d, depth):
     output: 3d position of each points
     '''
 
+    depth = depth[...,tf.newaxis]
+
     position = depth*ray_d+ray_o
     return position
 
@@ -35,6 +37,7 @@ def get_rays(H, W, focal, c2w):
 
 class Encoder(layers.Layer):
     def __init__(self, cam_param, input_c=3, layers_c=64, position_emb=True, position_emb_dim=16):
+        super().__init__()
         self.input_c=input_c
         self.layers_c=layers_c
         self.position_emb=position_emb
@@ -42,18 +45,20 @@ class Encoder(layers.Layer):
 
         self.H, self.W, self.focal=cam_param
         if self.position_emb:
-            self.encoder_layer_0 = layers.Conv2D(input_c + position_emb_dim, kernel_size=5, padding="SAME", activation="relu"),
-        else:
-            self.encoder_layer_0 = layers.Conv2D(input_c, kernel_size=5, padding="SAME", activation="relu"),
+            self.input_c = self.input_c + position_emb_dim
 
         self.encoder_cnn = tf.keras.Sequential([
+            layers.Conv2D(layers_c, kernel_size=5, padding="SAME", activation="relu"),
             layers.Conv2D(layers_c, kernel_size=5, padding="SAME", activation="relu"),
             layers.Conv2D(layers_c, kernel_size=5, padding="SAME", activation="relu"),
             layers.Conv2D(layers_c, kernel_size=5, padding="SAME", activation="relu"),
             layers.Conv2D(layers_c, kernel_size=5, padding="SAME", activation="relu")
         ], name="encoder_cnn")
                                         
-        
+    
+    # def set_input(self,:
+    #     self.d=d
+    #     self.c2w=c2w
 
     def call(self, x, d, c2w):
         '''
@@ -66,13 +71,12 @@ class Encoder(layers.Layer):
 
         if self.position_emb:
 
-            rays_o, rays_d = get_rays(self.H, self.W, self.focal, self.c2w) 
-
-            position = get_position(ray_o, rays_d, d)
+            rays_o, rays_d = get_rays(self.H, self.W, self.focal, c2w) 
+            position = get_position(rays_o, rays_d, d)
 
             x = tf.concat([x, position], axis=-1)
 
-        x = self.encoder_layer_0(x)
+        print(x.shape)
         x = self.encoder_cnn(x)  # BxDxHxW
         return x
 
@@ -80,7 +84,8 @@ class Encoder(layers.Layer):
 
 
 class SlotAttention(layers.Layer):
-    def __init__(self, num_iterations, num_slots, slot_dim, mlp_hidden_dim, epsilon=1e-8):
+    def __init__(self, num_iterations=2, num_slots=3, slot_dim=64, mlp_hidden_dim=64, epsilon=1e-8):
+        super().__init__()
         self.num_iterations = num_iterations
         self.num_slots = num_slots
         self.slot_dim = slot_dim
@@ -91,39 +96,39 @@ class SlotAttention(layers.Layer):
 
         self.slots_mu_fg = self.add_weight(
             initializer="glorot_uniform",
-            shape=[1, 1, self.slot_dim],
+            shape=[ 1, self.slot_dim],
             dtype=tf.float32,
             name="slots_mu_fg")
         self.slots_log_sigma_fg = self.add_weight(
             initializer="glorot_uniform",
-            shape=[1, 1, self.slot_dim],
+            shape=[1, self.slot_dim],
             dtype=tf.float32,
             name="slots_log_sigma_fg")
 
 
         self.slots_mu_bg = self.add_weight(
             initializer="glorot_uniform",
-            shape=[1, 1, self.slot_dim],
+            shape=[1, self.slot_dim],
             dtype=tf.float32,
             name="slots_mu_bg")
         self.slots_log_sigma_bg = self.add_weight(
             initializer="glorot_uniform",
-            shape=[1, 1, self.slot_dim],
+            shape=[1, self.slot_dim],
             dtype=tf.float32,
             name="slots_log_sigma_bg")
  
-        self.k = layers.Dense(self.slot_size, use_bias=False, name="k")
-        self.v = layers.Dense(self.slot_size, use_bias=False, name="v")
+        self.k = layers.Dense(self.slot_dim, use_bias=False, name="k")
+        self.v = layers.Dense(self.slot_dim, use_bias=False, name="v")
         self.q_fg = tf.keras.Sequential([layers.LayerNormalization(),
-                                         layers.Dense(self.slot_size, use_bias=False)],
+                                         layers.Dense(self.slot_dim, use_bias=False)],
                                          name="q_fg")
 
         self.q_bg = tf.keras.Sequential([layers.LayerNormalization(),
-                                         layers.Dense(self.slot_size, use_bias=False)],
+                                         layers.Dense(self.slot_dim, use_bias=False)],
                                          name="q_bg")
 
-        self.gru_fg = layers.GRUCell(self.slot_size)
-        self.gru_bg = layers.GRUCell(self.slot_size)
+        self.gru_fg = layers.GRUCell(self.slot_dim)
+        self.gru_bg = layers.GRUCell(self.slot_dim)
 
         self.mlp_fg = tf.keras.Sequential([
             layers.LayerNormalization(),
@@ -160,46 +165,46 @@ class SlotAttention(layers.Layer):
             slots_prev_bg = slots_bg
             slots_prev_fg = slots_fg
 
-            q_slot_fg = self.q_fg(slot_fg)
-            q_slot_fg *= self.slot_dim ** -0.5
-            q_slot_bg = self.q_bg(slot_bg)
-            q_slot_bg *= self.slot_dim ** -0.5
+            q_slots_fg = self.q_fg(slots_fg)
+            q_slots_fg *= self.slot_dim ** -0.5
+            q_slots_bg = self.q_bg(slots_bg)
+            q_slots_bg *= self.slot_dim ** -0.5
 
 
-            attn_logits_fg = tf.matmul(k_input, q_slot_fg.T)
-            attn_logits_bg = tf.matmul(k_input, q_slot_bg.T)
-            attn_logits = tf.concat([attn_logits_bg, attn_logits_fg], axis=0)
+            attn_logits_fg = tf.matmul(k_input, tf.transpose(q_slots_fg))
+            attn_logits_bg = tf.matmul(k_input, tf.transpose(q_slots_bg))
+            attn_logits = tf.concat([attn_logits_bg, attn_logits_fg], axis=-1)
             attn = tf.nn.softmax(attn_logits, axis=-1)
 
-            attn_bg, attn_fg = attn[0:1, :], attn[1:, :]  # 1xN, (K-1)xN
+            attn_bg, attn_fg = attn[:, 0:1], attn[:, 1:]  # Nx1, Nx(K-1)
 
 
             
             weight_bg = attn_bg + self.epsilon
             weight_bg /= tf.reduce_sum(weight_bg, axis=-2, keepdims=True)
-            updates_bg = tf.matmul(weight_bg.T, v)
+            updates_bg = tf.matmul(tf.transpose(weight_bg), v_input)
 
             weight_fg = attn_fg + self.epsilon
             weight_fg /= tf.reduce_sum(weight_fg, axis=-2, keepdims=True)
-            updates_fg = tf.matmul(weight_fg.T, v)
+            updates_fg = tf.matmul(tf.transpose(weight_fg), v_input)
             
 
 
-            slot_bg, _ = self.gru_bg(
+            slots_bg, _ = self.gru_bg(
                 updates_bg,
-                [slot_prev_bg]
+                [slots_prev_bg]
             )
-            slot_fg, _ = self.gru_fg(
+            slots_fg, _ = self.gru_fg(
                 updates_fg,
-                [slot_prev_fg]
+                [slots_prev_fg]
             )
 
-            slot_bg += self.mlp_bg(slot_bg)
-            slot_fg += self.mlp_fg(slot_fg)
+            slots_bg += self.mlp_bg(slots_bg)
+            slots_fg += self.mlp_fg(slots_fg)
     
-        slots = tf.concat([])
+        slots = tf.concat([slots_bg, slots_fg], axis=0)
 
-        return slots, attn
+        return slots, tf.transpose(attn)
 
 
 class Decoder(layers.Layer):
