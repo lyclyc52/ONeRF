@@ -76,7 +76,6 @@ class Encoder(layers.Layer):
 
             x = tf.concat([x, position], axis=-1)
 
-        print(x.shape)
         x = self.encoder_cnn(x)  # BxDxHxW
         return x
 
@@ -274,16 +273,10 @@ class SoftPositionEmbed(layers.Layer):
     ## added: (1, H, W, 64)
     return inputs + self.dense(self.grid)
 
-def spatial_broadcast(slots, resolution):
-  """Broadcast slot features to a 2D grid and collapse slot dimension."""
-  # `slots` has shape: [batch_size, num_slots, slot_size].
-  slots = tf.reshape(slots, [-1, slots.shape[-1]])[:, None, None, :]
-  grid = tf.tile(slots, [1, resolution[0], resolution[1], 1])
-  # `grid` has shape: [batch_size*num_slots, width, height, slot_size].
-  return grid
 
 class Encoder_Decoder(layers.Layer):
-    def __init__(self, cam_param, num_slots, num_iterations, resolution):
+    def __init__(self, cam_param, num_slots, num_iterations, resolution, 
+            decoder_initial_size=(25, 25)):
 
         super().__init__()
         self.num_slots = num_slots
@@ -291,40 +284,35 @@ class Encoder_Decoder(layers.Layer):
         self.resolution = resolution
 
         self.encoder = Encoder(cam_param)
-        
-        self.layer_norm = layers.LayerNormalization()
-        self.mlp = tf.keras.Sequential([
-            layers.Dense(64, activation="relu"),
-            layers.Dense(64)
-        ], name="feedforward")
 
         self.slot_attention = SlotAttention(
             num_iterations=self.num_iterations,
             num_slots=self.num_slots,
-            slot_size=64,
-            mlp_hidden_size=128)
+            slot_dim=64,
+            mlp_hidden_dim=128)
         
-        self.decoder_initial_size = (25, 25)
+        self.decoder_initial_size = decoder_initial_size
         self.decoder = Decoder(
             decoder_initial_size=self.decoder_initial_size)
     
-    def call(self, images, depth_maps, poses):
+    def call(self, images, depth_maps, c2ws):
         '''
         input:  images: images  BxHxWx3
                 d: depth map BxHxW
                 c2w: camera-to-world matrix Bx4x4
         '''
-        feature_maps = self.encoder(images, depth_maps, poses) # (B,H',W',C)
+        x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
 
+        # (N*H*W, C)
         x = tf.reshape(x, [x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]])
-        x = x[None, ...] # (1, N*H*W, C)
 
-        slots = self.slot_attention(x) # (1, N_slots, slot_size)
+        slots, attn = self.slot_attention(x) # (N_slots, slot_size)
 
-        #(1*N_slots, W_init, H_init, slot_size)
-        out = spatial_broadcast(slots, self.decoder_initial_size)
+        # (N_slots, W_init, H_init, slot_size)
+        broadcast = tf.tile(slots[:, None, None, :], 
+            [1, self.decoder_initial_size[0], self.decoder_initial_size[1], 1])
 
-        out = self.decoder(out) #(1*N_slots, W, H, 4)
+        out = self.decoder(broadcast) #(1*N_slots, W, H, 4)
 
         rgbs, masks = tf.split(out, [3, 1], axis=-1)
         masks = tf.nn.softmax(masks, axis=0) # softmax over N_slots
@@ -338,10 +326,14 @@ def build_model(hwf, num_slots, num_iters, data_shape):
     N, H, W, C = data_shape
     resolution = (H, W)
 
-    fn = Encoder_Decoder(cam_param=hwf, num_slots, num_iters, resolution)
-
-    image = tf.keras.Input(data_shape, batch_size=None)
-    outputs = fn(image)
-    model = tf.keras.Model(inputs=image, outputs=outputs)
+    images = tf.keras.Input((H, W, C), batch_size=N)
+    depth_maps = tf.keras.Input((H, W), batch_size=N)
+    c2ws = tf.keras.Input((4, 4), batch_size=N)
+    outputs = Encoder_Decoder(hwf, num_slots, num_iters, resolution)(images, depth_maps, c2ws)
+    model = tf.keras.Model(inputs=[images, depth_maps, c2ws], outputs=outputs)
     
+    # slots = tf.keras.Input((64,), batch_size=300)
+    # outputs = SlotAttention()(slots)
+    # model = tf.keras.Model(inputs=images, outputs=outputs)
+
     return model
