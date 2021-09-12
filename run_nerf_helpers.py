@@ -43,7 +43,9 @@ class Embedder:
         else:
             freq_bands = tf.linspace(2.**0., 2.**max_freq, N_freqs)
 
-        for freq in freq_bands:
+
+        for i in range(freq_bands.shape[0]):
+            freq = freq_bands[i]
             for p_fn in self.kwargs['periodic_fns']:
                 embed_fns.append(lambda x, p_fn=p_fn,
                                  freq=freq: p_fn(x * freq))
@@ -51,7 +53,6 @@ class Embedder:
 
         self.embed_fns = embed_fns
         self.out_dim = out_dim
-
     def embed(self, inputs):
         return tf.concat([fn(inputs) for fn in self.embed_fns], -1)
 
