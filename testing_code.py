@@ -20,9 +20,8 @@ N_samples=64
 
 pose = [H,W,focal]
 
-p,z,r,_=sampling_points(pose, c2w, is_selection=True)
-model = Encoder_Decoder_nerf(pose)
-x=model(image, depth, c2w,p,z,r)
+p,z,r=sampling_points(pose, c2w)
+
 
 print(p.shape)
 print(z.shape)

@@ -23,8 +23,8 @@ def get_rays(H, W, focal, c2w):
                        tf.range(H, dtype=tf.float32), indexing='xy')
     dirs = tf.stack([(i-W*.5)/focal, -(j-H*.5)/focal, -tf.ones_like(i)], -1)
     dirs = dirs[tf.newaxis,...]
-    N = c2w.shape[0]
-    dirs = tf.broadcast_to(dirs,[N,dirs.shape[1],dirs.shape[2],dirs.shape[3]])
+    # N = c2w.shape[0]
+    # dirs = tf.tile(dirs, [N, 1, 1, 1])
 
     rays_d = tf.reduce_sum(dirs[..., np.newaxis, :] * c2w[:, np.newaxis, np.newaxis, :3, :3], -1)
     rays_o = c2w[:,:3, -1]
@@ -50,8 +50,6 @@ def sampling_points(cam_param, c2w, N_samples=64, near=4., far=14., is_selection
     pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  # [N_rays, N_samples, 3]
 
     if is_selection:
-
-
         coords = tf.stack(tf.meshgrid(
                 tf.range(H), tf.range(W), indexing='ij'), -1)
         coords = tf.reshape(coords, [-1, 2])
@@ -76,44 +74,18 @@ def sampling_points(cam_param, c2w, N_samples=64, near=4., far=14., is_selection
 
     pts = tf.reshape(pts,[batch_size, -1, N_samples, 3])
     z_vals = tf.reshape(z_vals,[batch_size, -1, N_samples])
-    rays_d = tf.reshape(rays_d,[batch_size, -1, N_samples, 3])
+    rays_d = tf.reshape(rays_d,[batch_size, -1, 3])
     return pts, z_vals, rays_d
 
 
-def raw2outputs(raw, z_vals, rays_d):
-    def raw2alpha(raw, dists): return 1.0 - tf.exp(-raw * dists)
+def preprocess_pts(points, num_slots):
+    points_bg = points
+    points_fg = tf.tile(points[tf.newaxis,...],[num_slots-1, 1, 1, 1, 1])
 
-    # Compute 'distance' (in time) between each integration time along a ray.
-    dists = z_vals[..., 1:] - z_vals[..., :-1]
+    points_bg = tf.reshape(points_bg, [-1,3])
+    points_fg = tf.reshape(points_fg, [num_slots-1, -1, 3])
 
-    # The 'distance' from the last integration time is infinity.
-    dists = tf.concat(
-        [dists, tf.broadcast_to([1e10], dists[..., :1].shape)],
-        axis=-1)  # [N_rays, N_samples]
-
-    # Multiply each distance by the norm of its corresponding direction ray
-    # to convert to real world distance (accounts for non-unit directions).
-    dists = dists * tf.linalg.norm(rays_d[..., None, :], axis=-1)
-
-    # Extract RGB of each sample position along each ray.
-    rgb = tf.math.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
-
-
-    alpha = raw2alpha(raw[..., 3], dists)  # [N_rays, N_samples]
-
-    # Compute weight for RGB of each sample along each ray.  A cumprod() is
-    # used to express the idea of the ray not having reflected up to this
-    # sample yet.
-    # [N_rays, N_samples]
-    weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, axis=-1, exclusive=True)
-
-    # Computed weighted color of each sample along each ray.
-    rgb_map = tf.reduce_sum(
-        weights[..., None] * rgb, axis=-2)  # [N_rays, 3]
-
-    return rgb_map
-
-
+    return points_bg, points_fg
 
 
 
@@ -380,8 +352,8 @@ class Decoder_nerf(layers.Layer):
 
         slots_bg =  tf.tile(slots_bg[:, None, :], [1, N, 1])
         slots_fg =  tf.tile(slots_fg[:, None, :], [1, N, 1])
-
         points_bg = tf.reshape(points_bg, [-1,3])
+
 
         encoded_points_bg = self.embedding_fn(points_bg)
         encoded_points_bg = tf.reshape(encoded_points_bg, [N, self.out_dim])
@@ -503,7 +475,7 @@ class Encoder_Decoder(layers.Layer):
 
 
 
-class Encoder_Decoder_nerf(layers.Layer):
+class Encoder_Decoder_nerf(tf.keras.Model):
     def __init__(self, cam_param, num_slots = 3, num_iterations = 2):
 
         super().__init__()
@@ -524,42 +496,30 @@ class Encoder_Decoder_nerf(layers.Layer):
         self.decoder = Decoder_nerf()
 
 
-    def call(self, images, depth_maps, c2ws, points, z_vals, rays_d):
+    def call(self, images, depth_maps, c2ws, points, training):
         '''
         input:  images: images  BxHxWx3
                 d: depth map BxHxW
                 c2w: camera-to-world matrix Bx4x4
         '''
+        # if training[0]==1:
+        #     images, depth_maps, c2ws = images[0:1], depth_maps[0:1], c2ws[0:1]
+
+
         x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
         x = tf.reshape(x, [-1, x.shape[-1]])
 
         slots, attn = self.slot_attention(x) # (N_slots, slot_size)
-
-        B, P, N_samples, _ = points.shape
-        points_bg = points
-        points_fg = tf.tile(points[tf.newaxis,...],[self.num_slots-1, 1, 1, 1, 1])
+        
+        points_bg, points_fg = preprocess_pts(points, self.num_slots)
 
 
-        points_bg = tf.reshape(points_bg, [-1,3])
-        points_fg = tf.reshape(points_fg, [self.num_slots-1, -1, 3])
+        raws, masked_raws, unmasked_raws, masks = self.decoder(points_bg, points_fg, slots)
 
 
-        raws, masked_raws, unmasked_raws, masks = self.decoder(points_bg, points_fg], slots)
-
-        raws = tf.reshape(raws,[B, P, N_samples, 4])
-        masked_raws = tf.reshape(masked_raws,[self.num_slots, B, P, N_samples, 4])
-        unmasked_raws = tf.reshape(unmasked_raws,[self.num_slots, B, P, N_samples, 4])
-        masks = tf.reshape(masks,[self.num_slots, B, P, N_samples, 1])
-
-
-
-        rgb_maps = raw2outputs(raws, z_vals, rays_d)
-        z_vals = tf.tile(z_vals[tf.newaxis,...], [self.num_slots, 1, 1, 1])
-        rays_d = tf.tile(rays_d[tf.newaxis,...], [self.num_slots, 1, 1, 1])
-        slots_rgb_maps = raw2outputs(masked_raws, z_vals, rays_d)
 
         # points sampling
-        return rgb_maps, slots_rgb_maps
+        return raws, masked_raws, unmasked_raws, masks
 
 
 
@@ -570,15 +530,18 @@ def build_model(hwf, num_slots, num_iters, data_shape, N_samples=64, chunk=512, 
     N, H, W, C = data_shape
     resolution = (H, W)
 
-    images = tf.keras.Input((H, W, C), batch_size=N)
-    depth_maps = tf.keras.Input((H, W), batch_size=N)
-    c2ws = tf.keras.Input((4, 4), batch_size=N)
-    points = tf.keras.Input((chunk, N_samples, 3),batch_size=N)
-    z_vals = tf.keras.Input((chunk, N_samples),batch_size=N) 
-    rays_d = tf.keras.Input((chunk, N_samples, 3),batch_size=N)
+    N=4
+
+    images = tf.keras.Input((H, W, C), batch_size=4)
+    depth_maps = tf.keras.Input((H, W), batch_size=4)
+    c2ws = tf.keras.Input((4, 4), batch_size=4)
+    points = tf.keras.Input((chunk, N_samples, 3), batch_size=4)
+    training = tf.keras.Input((1,))
+
     if use_nerf:
-        outputs = Encoder_Decoder_nerf(hwf, num_slots, num_iters)(images, depth_maps, c2ws, points, z_vals, rays_d)
-        model = tf.keras.Model(inputs=[images, depth_maps, c2ws, points, z_vals, rays_d], outputs=outputs)
+        outputs = Encoder_Decoder_nerf(hwf, num_slots, num_iters)(images, depth_maps, c2ws, points, training)
+        model = tf.keras.Model(inputs=[images, depth_maps, c2ws, points, training], outputs=outputs)
+
     else:
         outputs = Encoder_Decoder(hwf, num_slots, num_iters, resolution)(images, depth_maps, c2ws)
         model = tf.keras.Model(inputs=[images, depth_maps, c2ws], outputs=outputs)
