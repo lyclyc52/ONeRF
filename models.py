@@ -1,6 +1,7 @@
 import numpy as np
-import tensorflow as tf
+from tensorflow import keras
 import tensorflow.keras.layers as layers
+import tensorflow as tf
 
 from run_nerf_helpers import get_embedder
 
@@ -23,8 +24,8 @@ def get_rays(H, W, focal, c2w):
                        tf.range(H, dtype=tf.float32), indexing='xy')
     dirs = tf.stack([(i-W*.5)/focal, -(j-H*.5)/focal, -tf.ones_like(i)], -1)
     dirs = dirs[tf.newaxis,...]
-    # N = c2w.shape[0]
-    # dirs = tf.tile(dirs, [N, 1, 1, 1])
+    N = c2w.shape[0]
+    dirs = tf.tile(dirs, [N, 1, 1, 1])
 
     rays_d = tf.reduce_sum(dirs[..., np.newaxis, :] * c2w[:, np.newaxis, np.newaxis, :3, :3], -1)
     rays_o = c2w[:,:3, -1]
@@ -46,6 +47,14 @@ def sampling_points(cam_param, c2w, N_samples=64, near=4., far=14., is_selection
     z_vals = near * (1.-t_vals) + far * (t_vals)
     z_vals = z_vals[tf.newaxis, tf.newaxis, tf.newaxis, :]
     z_vals = tf.broadcast_to(z_vals, [batch_size, H, W, N_samples])
+
+
+    mids = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
+    upper = tf.concat([mids, z_vals[..., -1:]], -1)
+    lower = tf.concat([z_vals[..., :1], mids], -1)
+    # stratified samples in those intervals
+    t_rand = tf.random.uniform(z_vals.shape)
+    z_vals = lower + (upper - lower) * t_rand
 
     pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  # [N_rays, N_samples, 3]
 
@@ -98,6 +107,7 @@ class Encoder(layers.Layer):
         self.layers_c=layers_c
         self.position_emb=position_emb
         self.position_emb_dim=position_emb_dim
+
 
         self.H, self.W, self.focal=cam_param
         if self.position_emb:
@@ -539,8 +549,9 @@ def build_model(hwf, num_slots, num_iters, data_shape, N_samples=64, chunk=512, 
     training = tf.keras.Input((1,))
 
     if use_nerf:
-        outputs = Encoder_Decoder_nerf(hwf, num_slots, num_iters)(images, depth_maps, c2ws, points, training)
-        model = tf.keras.Model(inputs=[images, depth_maps, c2ws, points, training], outputs=outputs)
+        # outputs = Encoder_Decoder_nerf(hwf, num_slots, num_iters)(images, depth_maps, c2ws, points, training)
+        # model = tf.keras.Model(inputs=[images, depth_maps, c2ws, points, training], outputs=outputs)
+        model = Encoder_Decoder_nerf(hwf, num_slots, num_iters)
 
     else:
         outputs = Encoder_Decoder(hwf, num_slots, num_iters, resolution)(images, depth_maps, c2ws)

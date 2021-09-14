@@ -1,6 +1,6 @@
 import os
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ["CUDA_VISIBLE_DEVICES"]="8"
+os.environ["CUDA_VISIBLE_DEVICES"]='1,2'
 from run_nerf_helpers import *
 from models import *
 from run_nerf import *
@@ -126,14 +126,14 @@ def generate_rgb(raws, masked_raws, z_vals, rays_d, pts_shape, num_slots):
 def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
         N_save=100, N_img=100, train_iters=100000, lrate=1e-4, N_samples=64, chunk=512):
 
-    os.makedirs('./imgs', exist_ok=True)
-    os.makedirs('./checkpoints', exist_ok=True)
+    os.makedirs('./imgs_1', exist_ok=True)
+    os.makedirs('./checkpoints_1', exist_ok=True)
 
     H, W, focal = hwf
 
     model = build_model(hwf, num_slots, num_iters, data_shape=images[0:1].shape, chunk=chunk, use_nerf=True)
 
-    trainable_vars = model.trainable_weights
+
     # if args.lrate_decay > 0:
     #     lrate = tf.keras.optimizers.schedules.ExponentialDecay(lrate,
     #                                                            decay_steps=args.lrate_decay * 1000, decay_rate=0.1)
@@ -142,7 +142,7 @@ def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
     ckpt = tf.train.Checkpoint(
         network=model, optimizer=optimizer)
     ckpt_manager = tf.train.CheckpointManager(
-        checkpoint=ckpt, directory='./checkpoints', max_to_keep=None)
+        checkpoint=ckpt, directory='./checkpoints_1', max_to_keep=None)
     ckpt.restore(ckpt_manager.latest_checkpoint)
     # load_weights_npy('./weights', model)
 
@@ -151,22 +151,29 @@ def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
 
     print('Start training')
     for i in range(0, train_iters):
-        t = np.random.randint(0, N_imgs, 4)
+        t = np.random.randint(0, N_imgs)
+        t = 0
         input_images, input_depths, input_poses = images[t], depth_maps[t], poses[t]
 
-
-        
+        input_images, input_depths, input_poses = input_images[None,...], input_depths[None,...], input_poses[None,...]
         with tf.GradientTape() as tape:
             points, z_vals, rays_d, select_inds = sampling_points(hwf, input_poses, N_samples, is_selection=True)
             pts_shape = points.shape
             training = mask = np.array([True])
-            raws, masked_raws, unmasked_raws, masks = model([input_images, input_depths, input_poses, points, training])
+            raws, masked_raws, unmasked_raws, masks = model(input_images, input_depths, input_poses, points, training)
+
             rgbs,_ = generate_rgb(raws, masked_raws, z_vals, rays_d, pts_shape, num_slots)
+            
+            
             loss_rgb = tf.gather_nd(input_images, select_inds, batch_dims = 1)
             loss = img2mse(rgbs, loss_rgb)
         
+
+        trainable_vars = model.trainable_weights
         gradients = tape.gradient(loss, trainable_vars)
         optimizer.apply_gradients(zip(gradients, trainable_vars))
+
+
 
 
         print('iter: {:06d}, loss: {:f}'.format(i, loss))
@@ -176,10 +183,11 @@ def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
             ckpt_manager.save(i)
         
         if i % N_img == 0:
-            print('Saving images')
-            val = np.random.randint(0, N_imgs, 4)
+           
+            val = np.random.randint(0, N_imgs)
+            val = 0
             val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
-
+            val_images, val_depths, val_poses = val_images[None,...], val_depths[None,...], val_poses[None,...]
             val_points, val_z_vals, val_rays_d = sampling_points(hwf, val_poses, N_samples)
 
             val_pts_shape = val_points.shape
@@ -188,8 +196,8 @@ def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
 
 
             for c in range(0, val_points.shape[1], chunk):
-                raws_c, masked_raws_c, unmasked_raws_c, masks_c = model([val_images, val_depths, val_poses, \
-                                val_points[:, c:c+chunk,...], training])
+                raws_c, masked_raws_c, unmasked_raws_c, masks_c = model(val_images, val_depths, val_poses, \
+                                val_points[:, c:c+chunk,...], training)
                 if c == 0:
                     val_raws = raws_c
                     val_slots_raws = masked_raws_c
@@ -199,18 +207,20 @@ def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
 
             val_rgb, val_slots_rgb = generate_rgb(val_raws, val_slots_raws, val_z_vals[0:1], val_rays_d[0:1], val_pts_shape, num_slots)
             
-            print(val_rgb.shape)
-            exit()
-            val_rgb = tf.reshape(val_rgb, [4, H, W, 3])
-            val_slots_rgb = tf.reshape(val_slots_rgb, [num_slots, 4, H, W, 3])
 
-            imageio.imwrite(os.path.join('./imgs/val_{:06d}.jpg'.format(i)), to8b(val_rgb[0]))
-            imageio.imwrite(os.path.join('./imgs/GT_{:06d}.jpg'.format(i)), val_images[0])
+            val_rgb = tf.reshape(val_rgb, [1, H, W, 3])
+            val_slots_rgb = tf.reshape(val_slots_rgb, [num_slots, 1, H, W, 3])
+
+            print('Save images')
+
+            imageio.imwrite(os.path.join('./imgs_1/val_{:06d}.jpg'.format(i)), to8b(val_rgb[0]))
+            imageio.imwrite(os.path.join('./imgs_1/GT_{:06d}.jpg'.format(i)),  to8b(val_images[0]))
 
             for j in range(val_slots_rgb.shape[0]):
                 imageio.imwrite(os.path.join(
-                    './imgs/val_{:06d}_slot{:03d}.jpg'.format(i, j)), to8b(val_slots_rgb[j][0]))
+                    './imgs_1/val_{:06d}_slot{:03d}.jpg'.format(i, j)), to8b(val_slots_rgb[j][0]))
             print('Done')
+
                 
 
 
@@ -230,6 +240,10 @@ def main():
 
     depth_file = 'data/nerf_synthetic/clevr_100_2objects/all_depths.npy'
     depth_maps = np.load(depth_file)
+    depth_maps = depth_maps[..., None]
+    depth_maps = tf.compat.v1.image.resize_area(depth_maps, [128, 128]).numpy()
+    depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
+
 
     parser = config_parser()
     args = parser.parse_args()
