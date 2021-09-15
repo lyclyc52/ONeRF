@@ -483,33 +483,16 @@ class Encoder_Decoder(layers.Layer):
 
         return recon, rgbs, masks, slots
 
-<<<<<<< HEAD
-class Encoder_Decoder_with_vgg(layers.Layer):
-    def __init__(self, cam_param, num_slots, num_iterations, resolution, 
-            decoder_initial_size=(25, 25)):
-=======
-
-
 class Encoder_Decoder_nerf(tf.keras.Model):
     def __init__(self, cam_param, num_slots = 3, num_iterations = 2):
->>>>>>> 0c1ad76b9c6b85fb12cb5a2d32c36d7ff6e8f2a6
 
         super().__init__()
         self.num_slots = num_slots
         self.num_iterations = num_iterations
-<<<<<<< HEAD
-        self.resolution = resolution
-
-        # for pos enbed
-        self.H, self.W, self.focal=cam_param
-
-        # self.encoder = Encoder(cam_param)
-=======
 
         self.cam_param = cam_param
 
         self.encoder = Encoder(cam_param)
->>>>>>> 0c1ad76b9c6b85fb12cb5a2d32c36d7ff6e8f2a6
 
         self.slot_attention = SlotAttention(
             num_iterations=self.num_iterations,
@@ -517,25 +500,65 @@ class Encoder_Decoder_nerf(tf.keras.Model):
             slot_dim=64,
             mlp_hidden_dim=128)
         
-<<<<<<< HEAD
-        self.decoder_initial_size = decoder_initial_size
-        self.decoder = Decoder(
-            decoder_initial_size=self.decoder_initial_size)
-    
-    def call(self, images, depth_maps, c2ws):
-=======
 
         self.decoder = Decoder_nerf()
 
 
     def call(self, images, depth_maps, c2ws, points, training):
->>>>>>> 0c1ad76b9c6b85fb12cb5a2d32c36d7ff6e8f2a6
         '''
         input:  images: images  BxHxWx3
                 d: depth map BxHxW
                 c2w: camera-to-world matrix Bx4x4
         '''
-<<<<<<< HEAD
+        # if training[0]==1:
+        #     images, depth_maps, c2ws = images[0:1], depth_maps[0:1], c2ws[0:1]
+
+
+        x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
+        x = tf.reshape(x, [-1, x.shape[-1]])
+
+        slots, attn = self.slot_attention(x) # (N_slots, slot_size)
+        
+        points_bg, points_fg = preprocess_pts(points, self.num_slots)
+
+
+        raws, masked_raws, unmasked_raws, masks = self.decoder(points_bg, points_fg, slots)
+
+
+
+        # points sampling
+        return raws, masked_raws, unmasked_raws, masks
+
+class Encoder_Decoder_with_vgg(layers.Layer):
+    def __init__(self, cam_param, num_slots, num_iterations, resolution, 
+            decoder_initial_size=(25, 25)):
+
+        super().__init__()
+        self.num_slots = num_slots
+        self.num_iterations = num_iterations
+        self.resolution = resolution
+
+        # for pos enbed
+        self.H, self.W, self.focal=cam_param
+
+        # self.encoder = Encoder(cam_param)
+
+        self.slot_attention = SlotAttention(
+            num_iterations=self.num_iterations,
+            num_slots=self.num_slots,
+            slot_dim=64,
+            mlp_hidden_dim=128)
+        
+        self.decoder_initial_size = decoder_initial_size
+        self.decoder = Decoder(
+            decoder_initial_size=self.decoder_initial_size)
+    
+    def call(self, images, depth_maps, c2ws):
+        '''
+        input:  images: images  BxHxWx3
+                d: depth map BxHxW
+                c2w: camera-to-world matrix Bx4x4
+        '''
         # x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
 
         # input is feature, do pos embed
@@ -561,33 +584,7 @@ class Encoder_Decoder_nerf(tf.keras.Model):
 
         return recon, rgbs, masks, slots
 
-def build_model(hwf, num_slots, num_iters, data_shape):
-=======
-        # if training[0]==1:
-        #     images, depth_maps, c2ws = images[0:1], depth_maps[0:1], c2ws[0:1]
-
-
-        x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
-        x = tf.reshape(x, [-1, x.shape[-1]])
-
-        slots, attn = self.slot_attention(x) # (N_slots, slot_size)
-        
-        points_bg, points_fg = preprocess_pts(points, self.num_slots)
-
-
-        raws, masked_raws, unmasked_raws, masks = self.decoder(points_bg, points_fg, slots)
-
-
-
-        # points sampling
-        return raws, masked_raws, unmasked_raws, masks
-
-
-
-
-
 def build_model(hwf, num_slots, num_iters, data_shape, N_samples=64, chunk=512, use_nerf=False):
->>>>>>> 0c1ad76b9c6b85fb12cb5a2d32c36d7ff6e8f2a6
     
     N, H, W, C = data_shape
     resolution = (H, W)
