@@ -1,8 +1,9 @@
 import numpy as np
-import tensorflow as tf
+from tensorflow import keras
 import tensorflow.keras.layers as layers
+import tensorflow as tf
 
-
+from run_nerf_helpers import get_embedder
 
 
 def get_position(ray_o, ray_d, depth):
@@ -24,7 +25,7 @@ def get_rays(H, W, focal, c2w):
     dirs = tf.stack([(i-W*.5)/focal, -(j-H*.5)/focal, -tf.ones_like(i)], -1)
     dirs = dirs[tf.newaxis,...]
     N = c2w.shape[0]
-    dirs = tf.broadcast_to(dirs,[N,dirs.shape[1],dirs.shape[2],dirs.shape[3]])
+    dirs = tf.tile(dirs, [N, 1, 1, 1])
 
     rays_d = tf.reduce_sum(dirs[..., np.newaxis, :] * c2w[:, np.newaxis, np.newaxis, :3, :3], -1)
     rays_o = c2w[:,:3, -1]
@@ -35,6 +36,70 @@ def get_rays(H, W, focal, c2w):
     return rays_o, rays_d
 
 
+def sampling_points(cam_param, c2w, N_samples=64, near=4., far=14., is_selection=False, N_selection=512):
+    H, W, focal = cam_param
+    batch_size = c2w.shape[0]
+
+    rays_o, rays_d = get_rays(H, W, focal, c2w) 
+
+    t_vals = tf.linspace(0., 1., N_samples)
+
+    z_vals = near * (1.-t_vals) + far * (t_vals)
+    z_vals = z_vals[tf.newaxis, tf.newaxis, tf.newaxis, :]
+    z_vals = tf.broadcast_to(z_vals, [batch_size, H, W, N_samples])
+
+
+    mids = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
+    upper = tf.concat([mids, z_vals[..., -1:]], -1)
+    lower = tf.concat([z_vals[..., :1], mids], -1)
+    # stratified samples in those intervals
+    t_rand = tf.random.uniform(z_vals.shape)
+    z_vals = lower + (upper - lower) * t_rand
+
+    pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  # [N_rays, N_samples, 3]
+
+    if is_selection:
+        coords = tf.stack(tf.meshgrid(
+                tf.range(H), tf.range(W), indexing='ij'), -1)
+        coords = tf.reshape(coords, [-1, 2])
+        select_inds = np.random.choice(
+            coords.shape[0], size=[N_selection], replace=False)
+        # pts = tf.reshape(pts,[batch_size, -1, N_samples, 3])
+        # pts = tf.reshape(pts,[batch_size, -1, N_samples])
+
+
+        select_inds = tf.gather_nd(coords, select_inds[:, tf.newaxis])
+        select_inds = tf.tile(select_inds[tf.newaxis,...],[batch_size,1,1])
+       
+
+
+        pts = tf.gather_nd(pts, select_inds, batch_dims = 1)
+        z_vals = tf.gather_nd(z_vals, select_inds, batch_dims = 1)
+        rays_d = tf.gather_nd(rays_d, select_inds, batch_dims = 1)
+
+
+
+        return pts, z_vals, rays_d, select_inds
+
+    pts = tf.reshape(pts,[batch_size, -1, N_samples, 3])
+    z_vals = tf.reshape(z_vals,[batch_size, -1, N_samples])
+    rays_d = tf.reshape(rays_d,[batch_size, -1, 3])
+    return pts, z_vals, rays_d
+
+
+def preprocess_pts(points, num_slots):
+    points_bg = points
+    points_fg = tf.tile(points[tf.newaxis,...],[num_slots-1, 1, 1, 1, 1])
+
+    points_bg = tf.reshape(points_bg, [-1,3])
+    points_fg = tf.reshape(points_fg, [num_slots-1, -1, 3])
+
+    return points_bg, points_fg
+
+
+
+
+
 class Encoder(layers.Layer):
     def __init__(self, cam_param, input_c=3, layers_c=64, position_emb=True, position_emb_dim=16):
         super().__init__()
@@ -42,6 +107,7 @@ class Encoder(layers.Layer):
         self.layers_c=layers_c
         self.position_emb=position_emb
         self.position_emb_dim=position_emb_dim
+
 
         self.H, self.W, self.focal=cam_param
         if self.position_emb:
@@ -73,7 +139,6 @@ class Encoder(layers.Layer):
 
             rays_o, rays_d = get_rays(self.H, self.W, self.focal, c2w) 
             position = get_position(rays_o, rays_d, d)
-
             x = tf.concat([x, position], axis=-1)
 
         x = self.encoder_cnn(x)  # BxDxHxW
@@ -243,6 +308,103 @@ class Decoder(layers.Layer):
 
         return x #(B, H, W, 4)
 
+class Decoder_nerf(layers.Layer):
+    def __init__(self, position_emb_dim=10, mlp_hidden_size=64):
+        super().__init__()
+
+        # self.H, self.W, self.focal=cam_param
+        self.position_emb_dim = position_emb_dim
+        self.embedding_fn, self.out_dim = get_embedder(self.position_emb_dim, 0)
+
+        self.mlp_hidden_size = mlp_hidden_size
+
+
+        self.decoder_mlp_bg_layer_0 = tf.keras.Sequential([
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+        ], name="decoder_mlp_bg_layer_0")
+
+        self.decoder_mlp_bg_layer_1 = tf.keras.Sequential([
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+            layers.Dense(4, activation="relu"),
+        ], name="decoder_mlp_bg_layer_1")
+
+
+        self.decoder_mlp_fg_layer_0 = tf.keras.Sequential([
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+        ], name="decoder_mlp_fg_layer_0")
+
+        self.decoder_mlp_fg_layer_1 = tf.keras.Sequential([
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+            layers.Dense(self.mlp_hidden_size, activation="relu"),
+            layers.Dense(4, activation="relu"),
+        ], name="decoder_mlp_fg_layer_1")
+
+    def call(self, points_bg, points_fg, slots):
+        '''
+        inputs: points_bg: points sampled in background   Nx3
+                points_fg: points sampled in objects  (K-1)xNx3
+                slots: generated by slot attention model  KxC
+
+        outputs: rgb colors and volume density of bg and fg
+        '''
+
+        K, C = slots.shape
+        N = points_bg.shape[0]
+
+        
+        slots_bg = slots[0:1, :]  # 1xC
+        slots_fg = slots[1:, :]  # (K-1)xC
+
+        slots_bg =  tf.tile(slots_bg[:, None, :], [1, N, 1])
+        slots_fg =  tf.tile(slots_fg[:, None, :], [1, N, 1])
+        points_bg = tf.reshape(points_bg, [-1,3])
+
+
+        encoded_points_bg = self.embedding_fn(points_bg)
+        encoded_points_bg = tf.reshape(encoded_points_bg, [N, self.out_dim])
+        encoded_points_bg = encoded_points_bg[None, ...]
+
+        
+        points_fg = tf.reshape(points_fg, [-1,3])
+        encoded_points_fg = self.embedding_fn(points_fg)
+        encoded_points_fg = tf.reshape(encoded_points_fg, [K-1, N,  self.out_dim])
+
+
+        input_bg = tf.concat([encoded_points_bg, slots_bg], axis=-1)
+        input_bg = input_bg[0]
+        input_fg = tf.concat([encoded_points_fg, slots_fg], axis=-1)
+        input_fg = tf.reshape(input_fg, [-1, self.out_dim + C])
+
+        tmp = self.decoder_mlp_bg_layer_0(input_bg)
+        raw_bg = self.decoder_mlp_bg_layer_1(tf.concat([input_bg, tmp], axis=-1))
+        raw_bg = raw_bg[tf.newaxis, ...]
+
+        tmp = self.decoder_mlp_fg_layer_0(input_fg)
+        raw_fg = self.decoder_mlp_fg_layer_1(tf.concat([input_fg,tmp], axis=-1))
+        raw_fg = tf.reshape(raw_fg, [K-1, N, 4])
+
+
+        all_raws = tf.concat([raw_bg, raw_fg], axis=0)  # KxNx4
+
+        raw_masks = tf.nn.relu(all_raws[:, :, -1:])  # KxNx1
+        masks = raw_masks / (tf.math.reduce_sum(raw_masks,axis=0) + 1e-5)  # KxNx1
+        raw_rgb = (tf.math.tanh(all_raws[:, :, :3]) + 1) / 2
+        raw_sigma = raw_masks
+
+        unmasked_raws = tf.concat([raw_rgb, raw_sigma], axis=2)  # KxNx4
+        masked_raws = unmasked_raws * masks
+        raws = tf.math.reduce_sum(masked_raws, axis=0)
+
+        return raws, masked_raws, unmasked_raws, masks 
+
+
+
+
 
 def build_grid(resolution):
   ranges = [np.linspace(0., 1., num=res) for res in resolution]
@@ -321,19 +483,33 @@ class Encoder_Decoder(layers.Layer):
 
         return recon, rgbs, masks, slots
 
+<<<<<<< HEAD
 class Encoder_Decoder_with_vgg(layers.Layer):
     def __init__(self, cam_param, num_slots, num_iterations, resolution, 
             decoder_initial_size=(25, 25)):
+=======
+
+
+class Encoder_Decoder_nerf(tf.keras.Model):
+    def __init__(self, cam_param, num_slots = 3, num_iterations = 2):
+>>>>>>> 0c1ad76b9c6b85fb12cb5a2d32c36d7ff6e8f2a6
 
         super().__init__()
         self.num_slots = num_slots
         self.num_iterations = num_iterations
+<<<<<<< HEAD
         self.resolution = resolution
 
         # for pos enbed
         self.H, self.W, self.focal=cam_param
 
         # self.encoder = Encoder(cam_param)
+=======
+
+        self.cam_param = cam_param
+
+        self.encoder = Encoder(cam_param)
+>>>>>>> 0c1ad76b9c6b85fb12cb5a2d32c36d7ff6e8f2a6
 
         self.slot_attention = SlotAttention(
             num_iterations=self.num_iterations,
@@ -341,16 +517,25 @@ class Encoder_Decoder_with_vgg(layers.Layer):
             slot_dim=64,
             mlp_hidden_dim=128)
         
+<<<<<<< HEAD
         self.decoder_initial_size = decoder_initial_size
         self.decoder = Decoder(
             decoder_initial_size=self.decoder_initial_size)
     
     def call(self, images, depth_maps, c2ws):
+=======
+
+        self.decoder = Decoder_nerf()
+
+
+    def call(self, images, depth_maps, c2ws, points, training):
+>>>>>>> 0c1ad76b9c6b85fb12cb5a2d32c36d7ff6e8f2a6
         '''
         input:  images: images  BxHxWx3
                 d: depth map BxHxW
                 c2w: camera-to-world matrix Bx4x4
         '''
+<<<<<<< HEAD
         # x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
 
         # input is feature, do pos embed
@@ -377,18 +562,61 @@ class Encoder_Decoder_with_vgg(layers.Layer):
         return recon, rgbs, masks, slots
 
 def build_model(hwf, num_slots, num_iters, data_shape):
+=======
+        # if training[0]==1:
+        #     images, depth_maps, c2ws = images[0:1], depth_maps[0:1], c2ws[0:1]
+
+
+        x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
+        x = tf.reshape(x, [-1, x.shape[-1]])
+
+        slots, attn = self.slot_attention(x) # (N_slots, slot_size)
+        
+        points_bg, points_fg = preprocess_pts(points, self.num_slots)
+
+
+        raws, masked_raws, unmasked_raws, masks = self.decoder(points_bg, points_fg, slots)
+
+
+
+        # points sampling
+        return raws, masked_raws, unmasked_raws, masks
+
+
+
+
+
+def build_model(hwf, num_slots, num_iters, data_shape, N_samples=64, chunk=512, use_nerf=False):
+>>>>>>> 0c1ad76b9c6b85fb12cb5a2d32c36d7ff6e8f2a6
     
     N, H, W, C = data_shape
     resolution = (H, W)
 
-    images = tf.keras.Input((H, W, C), batch_size=N)
-    depth_maps = tf.keras.Input((H, W), batch_size=N)
-    c2ws = tf.keras.Input((4, 4), batch_size=N)
-    outputs = Encoder_Decoder(hwf, num_slots, num_iters, resolution)(images, depth_maps, c2ws)
-    model = tf.keras.Model(inputs=[images, depth_maps, c2ws], outputs=outputs)
+    N=4
+
+    images = tf.keras.Input((H, W, C), batch_size=4)
+    depth_maps = tf.keras.Input((H, W), batch_size=4)
+    c2ws = tf.keras.Input((4, 4), batch_size=4)
+    points = tf.keras.Input((chunk, N_samples, 3), batch_size=4)
+    training = tf.keras.Input((1,))
+
+    if use_nerf:
+        # outputs = Encoder_Decoder_nerf(hwf, num_slots, num_iters)(images, depth_maps, c2ws, points, training)
+        # model = tf.keras.Model(inputs=[images, depth_maps, c2ws, points, training], outputs=outputs)
+        model = Encoder_Decoder_nerf(hwf, num_slots, num_iters)
+
+    else:
+        outputs = Encoder_Decoder(hwf, num_slots, num_iters, resolution)(images, depth_maps, c2ws)
+        model = tf.keras.Model(inputs=[images, depth_maps, c2ws], outputs=outputs)
+
+
+
+
     
     # slots = tf.keras.Input((64,), batch_size=300)
     # outputs = SlotAttention()(slots)
     # model = tf.keras.Model(inputs=images, outputs=outputs)
 
     return model
+
+
