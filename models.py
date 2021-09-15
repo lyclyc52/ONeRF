@@ -321,6 +321,61 @@ class Encoder_Decoder(layers.Layer):
 
         return recon, rgbs, masks, slots
 
+class Encoder_Decoder_with_vgg(layers.Layer):
+    def __init__(self, cam_param, num_slots, num_iterations, resolution, 
+            decoder_initial_size=(25, 25)):
+
+        super().__init__()
+        self.num_slots = num_slots
+        self.num_iterations = num_iterations
+        self.resolution = resolution
+
+        # for pos enbed
+        self.H, self.W, self.focal=cam_param
+
+        # self.encoder = Encoder(cam_param)
+
+        self.slot_attention = SlotAttention(
+            num_iterations=self.num_iterations,
+            num_slots=self.num_slots,
+            slot_dim=64,
+            mlp_hidden_dim=128)
+        
+        self.decoder_initial_size = decoder_initial_size
+        self.decoder = Decoder(
+            decoder_initial_size=self.decoder_initial_size)
+    
+    def call(self, images, depth_maps, c2ws):
+        '''
+        input:  images: images  BxHxWx3
+                d: depth map BxHxW
+                c2w: camera-to-world matrix Bx4x4
+        '''
+        # x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
+
+        # input is feature, do pos embed
+        rays_o, rays_d = get_rays(self.H, self.W, self.focal, c2ws) 
+        position = get_position(rays_o, rays_d, depth_maps)
+        x = tf.concat([images, position], axis=-1)
+
+        # (N*H*W, C)
+        x = tf.reshape(x, [-1, x.shape[-1]])
+
+        slots, attn = self.slot_attention(x) # (N_slots, slot_size)
+
+        # (N_slots, W_init, H_init, slot_size)
+        broadcast = tf.tile(slots[:, None, None, :], 
+            [1, self.decoder_initial_size[0], self.decoder_initial_size[1], 1])
+
+        out = self.decoder(broadcast) #(1*N_slots, W, H, 4)
+
+        rgbs, masks = tf.split(out, [3, 1], axis=-1)
+        masks = tf.nn.softmax(masks, axis=0) # softmax over N_slots
+
+        recon = tf.reduce_sum(rgbs * masks, axis=0)  # Recombine image.
+
+        return recon, rgbs, masks, slots
+
 def build_model(hwf, num_slots, num_iters, data_shape):
     
     N, H, W, C = data_shape
