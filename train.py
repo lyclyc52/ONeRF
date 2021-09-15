@@ -4,6 +4,7 @@ os.environ["CUDA_VISIBLE_DEVICES"]='1,2'
 from run_nerf_helpers import *
 from models import *
 from run_nerf import *
+# import tensorflow.keras.applications.vgg16.VGG16 as VGG16
 
 
 def save_weights_npy(net, i):
@@ -21,8 +22,8 @@ def load_weights_npy(dir, model):
 
 
 
-def train(images, depth_maps, hwf, poses, num_slots, num_iters=3,
-        N_save=100, N_img=100, train_iters=100000, lrate=1e-4):
+def train(images, depth_maps, hwf, poses, num_slots, num_iters=3, N_print=500,
+        N_save=2000, N_img=1000, train_iters=1000000, lrate=1e-4):
     # images: (N, H, W, C)
     # depth_maps : (N, H, W)
     # poses: (N, 4, 4)
@@ -56,7 +57,8 @@ def train(images, depth_maps, hwf, poses, num_slots, num_iters=3,
         gradients = tape.gradient(loss, trainable_vars)
         optimizer.apply_gradients(zip(gradients, trainable_vars))
 
-        print('iter: {:06d}, img: {:03d}, loss: {:f}'.format(i, t, loss))
+        if i % N_print == 0:
+            print('iter: {:06d}, img: {:03d}, loss: {:f}'.format(i, t, loss))
 
         if i % N_save == 0:
             # save_weights_npy(model, i)
@@ -75,56 +77,11 @@ def train(images, depth_maps, hwf, poses, num_slots, num_iters=3,
 
 
 
-def raw2outputs(raw, z_vals, rays_d):
-    def raw2alpha(raw, dists): return 1.0 - tf.exp(-raw * dists)
-
-    # Compute 'distance' (in time) between each integration time along a ray.
-    dists = z_vals[..., 1:] - z_vals[..., :-1]
-
-    # The 'distance' from the last integration time is infinity.
-    dists = tf.concat(
-        [dists, tf.broadcast_to([1e10], dists[..., :1].shape)],
-        axis=-1)  # [N_rays, N_samples]
-
-    # Multiply each distance by the norm of its corresponding direction ray
-    # to convert to real world distance (accounts for non-unit directions).
-    dists = dists * tf.linalg.norm(rays_d[..., None, :], axis=-1)
-
-    # Extract RGB of each sample position along each ray.
-    rgb = tf.math.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
 
 
-    alpha = raw2alpha(raw[..., 3], dists)  # [N_rays, N_samples]
 
-    # Compute weight for RGB of each sample along each ray.  A cumprod() is
-    # used to express the idea of the ray not having reflected up to this
-    # sample yet.
-    # [N_rays, N_samples]
-    weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, axis=-1, exclusive=True)
-
-    # Computed weighted color of each sample along each ray.
-    rgb_map = tf.reduce_sum(
-        weights[..., None] * rgb, axis=-2)  # [N_rays, 3]
-
-    return rgb_map
-
-def generate_rgb(raws, masked_raws, z_vals, rays_d, pts_shape, num_slots):
-    B, P, N_samples,_ = pts_shape
-    raws = tf.reshape(raws,[B, P, N_samples, 4])
-    masked_raws = tf.reshape(masked_raws,[num_slots, B, P, N_samples, 4])
-    # unmasked_raws = tf.reshape(unmasked_raws,[num_slots, B, P, N_samples, 4])
-    # masks = tf.reshape(masks,[num_slots, B, P, N_samples, 1])
-
-    rgb_maps = raw2outputs(raws, z_vals, rays_d)
-    z_vals = tf.tile(z_vals[tf.newaxis,...], [num_slots, 1, 1, 1])
-    rays_d = tf.tile(rays_d[tf.newaxis,...], [num_slots, 1, 1, 1])
-    slots_rgb_maps = raw2outputs(masked_raws, z_vals, rays_d)
-
-    return rgb_maps, slots_rgb_maps
-
-
-def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
-        N_save=100, N_img=100, train_iters=100000, lrate=1e-4, N_samples=64, chunk=512):
+def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3, N_print=500,
+        N_save=2000, N_img=1000, train_iters=1000000, lrate=5e-4, N_samples=64, chunk=1024*64 , N_selection=64):
 
     os.makedirs('./imgs_1', exist_ok=True)
     os.makedirs('./checkpoints_1', exist_ok=True)
@@ -148,6 +105,11 @@ def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
 
     N_imgs = images.shape[0]
 
+    # basemodel = VGG16(include_top = False)    
+    # vgg16 = tf.keras.Sequential(basemodel.layers[:16])
+    # for layer in vgg16.layers[:10]:
+    #     layer.trainable = False
+
 
     print('Start training')
     for i in range(0, train_iters):
@@ -157,15 +119,18 @@ def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
 
         input_images, input_depths, input_poses = input_images[None,...], input_depths[None,...], input_poses[None,...]
         with tf.GradientTape() as tape:
-            points, z_vals, rays_d, select_inds = sampling_points(hwf, input_poses, N_samples, is_selection=True)
+
+            points, z_vals, rays_d, select_inds = sampling_points(hwf, input_poses, N_samples, is_selection=True, N_selection=N_selection)
             pts_shape = points.shape
             training = mask = np.array([True])
             raws, masked_raws, unmasked_raws, masks = model(input_images, input_depths, input_poses, points, training)
 
             rgbs,_ = generate_rgb(raws, masked_raws, z_vals, rays_d, pts_shape, num_slots)
-            
-            
-            loss_rgb = tf.gather_nd(input_images, select_inds, batch_dims = 1)
+
+            rgbs = tf.reshape(rgbs, [1, N_selection, N_selection, 3])
+
+            select_inds_x, select_inds_y = select_inds 
+            loss_rgb = input_images[:, select_inds_x:select_inds_x+64, select_inds_y:select_inds_y+64,...]
             loss = img2mse(rgbs, loss_rgb)
         
 
@@ -175,8 +140,9 @@ def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
 
 
 
+        if i % N_print == 0:
+            print('iter: {:06d}, img: {:03d}, loss: {:f}'.format(i, t, loss))
 
-        print('iter: {:06d}, loss: {:f}'.format(i, loss))
 
         if i % N_save == 0:
             # save_weights_npy(model, i)
@@ -232,10 +198,10 @@ def train_with_nerf(images, depth_maps, hwf, poses, num_slots, num_iters=3,
 
 def main():
     # train args
-    N_save = 200
-    N_img = 100
-    train_iters = 50000
-    lrate = 5e-4
+    # N_save = 200
+    # N_img = 100
+    # train_iters = 50000
+    # lrate = 5e-4
     # train args end
 
     depth_file = 'data/nerf_synthetic/clevr_100_2objects/all_depths.npy'
@@ -254,8 +220,7 @@ def main():
                 args.datadir, args.half_res, args.testskip)
 
     train_with_nerf(images[0:N_train, :, :, 0:3], depth_maps[0:N_train], hwf, 
-            poses[0:N_train], 3, 3, N_save, N_img=N_img, train_iters=train_iters,
-            lrate=lrate)
+            poses[0:N_train], 3, 3)
 
 if __name__ == '__main__':
     print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))

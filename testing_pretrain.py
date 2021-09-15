@@ -1,5 +1,6 @@
 from run_nerf import *
 import os 
+from models import *
 
 os.environ['CUDA_VISIBLE_DEVICES']='2,3'
 parser = config_parser()
@@ -59,17 +60,33 @@ testimgdir = 'tesing_rgb'
 
 file_name = 'all_depths.npy'
 
-for i in i_train:
-    target = images[i]
-    pose = poses[i, :3, :4]
 
-    rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, c2w=pose,
-                                    **render_kwargs_test)
-    disp = 1/disp
-    
-    if i == 0:
-        all_depths = disp[None, ...]
+N_samples=128
+
+target = images[0:2]
+pose = poses[0:2, :3, :4]
+
+pts, z_vals, rays_d = sampling_points(hwf, pose, is_selection=False, near=near, far=far, N_samples=N_samples)
+print(pts.shape)
+print(z_vals.shape)
+print(rays_d.shape)
+
+pts_shape = pts.shape
+input_pts = tf.reshape(pts , [-1,N_samples,3])
+input_rays_d = tf.reshape(rays_d, [-1, 3])
+
+chunk=1024*64
+for i in range(0,input_pts.shape[0],chunk):
+    raw_c = render_kwargs_test['network_query_fn'](input_pts[i:i+chunk], input_rays_d[i:i+chunk], render_kwargs_test['network_fn'])
+    if i==0:
+        raw=raw_c
     else:
-        all_depths = tf.concat([all_depths, disp[None, ...]], axis=0)     
-    np.save(file_name, all_depths)   
-    print('Finish '+str(i))
+        raw=tf.concat([raw,raw_c],axis=0)
+masked_raw = raw[None,...]
+
+
+rgb,_ = generate_rgb(raw, masked_raw, z_vals, rays_d, pts_shape, 1)
+
+rgb = tf.reshape(rgb, [2, H, W ,3])
+imageio.imwrite(os.path.join('./testing_output/GT_{:03d}.jpg'.format(0)), to8b(rgb[0]))
+imageio.imwrite(os.path.join('./testing_output/GT_{:03d}.jpg'.format(1)), to8b(rgb[1]))

@@ -27,7 +27,10 @@ def get_rays(H, W, focal, c2w):
     N = c2w.shape[0]
     dirs = tf.tile(dirs, [N, 1, 1, 1])
 
+
     rays_d = tf.reduce_sum(dirs[..., np.newaxis, :] * c2w[:, np.newaxis, np.newaxis, :3, :3], -1)
+
+
     rays_o = c2w[:,:3, -1]
     rays_o = rays_o[:,np.newaxis, np.newaxis, :]
 
@@ -36,7 +39,7 @@ def get_rays(H, W, focal, c2w):
     return rays_o, rays_d
 
 
-def sampling_points(cam_param, c2w, N_samples=64, near=4., far=14., is_selection=False, N_selection=512):
+def sampling_points(cam_param, c2w, N_samples=64, near=4., far=14., is_selection=False, N_selection=64):
     H, W, focal = cam_param
     batch_size = c2w.shape[0]
 
@@ -46,6 +49,7 @@ def sampling_points(cam_param, c2w, N_samples=64, near=4., far=14., is_selection
 
     z_vals = near * (1.-t_vals) + far * (t_vals)
     z_vals = z_vals[tf.newaxis, tf.newaxis, tf.newaxis, :]
+
     z_vals = tf.broadcast_to(z_vals, [batch_size, H, W, N_samples])
 
 
@@ -56,28 +60,40 @@ def sampling_points(cam_param, c2w, N_samples=64, near=4., far=14., is_selection
     t_rand = tf.random.uniform(z_vals.shape)
     z_vals = lower + (upper - lower) * t_rand
 
-    pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  # [N_rays, N_samples, 3]
+    pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., None]  # [N_rays, N_samples, 3]
+
 
     if is_selection:
-        coords = tf.stack(tf.meshgrid(
-                tf.range(H), tf.range(W), indexing='ij'), -1)
-        coords = tf.reshape(coords, [-1, 2])
-        select_inds = np.random.choice(
-            coords.shape[0], size=[N_selection], replace=False)
-        # pts = tf.reshape(pts,[batch_size, -1, N_samples, 3])
-        # pts = tf.reshape(pts,[batch_size, -1, N_samples])
+        # coords = tf.stack(tf.meshgrid(
+        #         tf.range(H), tf.range(W), indexing='ij'), -1)
+        # coords = tf.reshape(coords, [-1, 2])
+        # select_inds = np.random.choice(
+        #     coords.shape[0], size=[N_selection], replace=False)
+        # # pts = tf.reshape(pts,[batch_size, -1, N_samples, 3])
+        # # pts = tf.reshape(pts,[batch_size, -1, N_samples])
 
 
-        select_inds = tf.gather_nd(coords, select_inds[:, tf.newaxis])
-        select_inds = tf.tile(select_inds[tf.newaxis,...],[batch_size,1,1])
-       
+        # select_inds = tf.gather_nd(coords, select_inds[:, tf.newaxis])
+        # # select_inds = tf.tile(select_inds[tf.newaxis,...],[batch_size,1,1])
+        # select_inds = select_inds[tf.newaxis,...]
 
 
-        pts = tf.gather_nd(pts, select_inds, batch_dims = 1)
-        z_vals = tf.gather_nd(z_vals, select_inds, batch_dims = 1)
-        rays_d = tf.gather_nd(rays_d, select_inds, batch_dims = 1)
+        # pts = tf.gather_nd(pts, select_inds, batch_dims = 1)
+        # z_vals = tf.gather_nd(z_vals, select_inds, batch_dims = 1)
+        # rays_d = tf.gather_nd(rays_d, select_inds, batch_dims = 1)
+        
+        select_inds_x = np.random.randint(0,64)
+        select_inds_y = np.random.randint(0,64)
 
+        select_inds = [select_inds_x, select_inds_y]
 
+        pts = pts[:,select_inds_x:select_inds_x+N_selection, select_inds_y:select_inds_y+N_selection,...]
+        z_vals = z_vals[:,select_inds_x:select_inds_x+N_selection, select_inds_y:select_inds_y+N_selection,...]
+        rays_d = rays_d[:,select_inds_x:select_inds_x+N_selection, select_inds_y:select_inds_y+N_selection,...]
+
+        pts = tf.reshape(pts,[batch_size, -1, N_samples, 3])
+        z_vals = tf.reshape(z_vals,[batch_size, -1, N_samples])
+        rays_d = tf.reshape(rays_d,[batch_size, -1, 3])
 
         return pts, z_vals, rays_d, select_inds
 
@@ -97,7 +113,52 @@ def preprocess_pts(points, num_slots):
     return points_bg, points_fg
 
 
+def raw2outputs(raw, z_vals, rays_d):
+    def raw2alpha(raw, dists): return 1.0 - tf.exp(-raw * dists)
 
+    # Compute 'distance' (in time) between each integration time along a ray.
+    dists = z_vals[..., 1:] - z_vals[..., :-1]
+
+    # The 'distance' from the last integration time is infinity.
+    dists = tf.concat(
+        [dists, tf.broadcast_to([1e10], dists[..., :1].shape)],
+        axis=-1)  # [N_rays, N_samples]
+
+    # Multiply each distance by the norm of its corresponding direction ray
+    # to convert to real world distance (accounts for non-unit directions).
+    dists = dists * tf.linalg.norm(rays_d[..., None, :], axis=-1)
+
+    # Extract RGB of each sample position along each ray.
+    rgb = tf.math.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
+
+
+    alpha = raw2alpha(raw[..., 3], dists)  # [N_rays, N_samples]
+
+    # Compute weight for RGB of each sample along each ray.  A cumprod() is
+    # used to express the idea of the ray not having reflected up to this
+    # sample yet.
+    # [N_rays, N_samples]
+    weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, axis=-1, exclusive=True)
+
+    # Computed weighted color of each sample along each ray.
+    rgb_map = tf.reduce_sum(
+        weights[..., None] * rgb, axis=-2)  # [N_rays, 3]
+
+    return rgb_map
+
+def generate_rgb(raws, masked_raws, z_vals, rays_d, pts_shape, num_slots):
+    B, P, N_samples,_ = pts_shape
+    raws = tf.reshape(raws,[B, P, N_samples, 4])
+    masked_raws = tf.reshape(masked_raws,[num_slots, B, P, N_samples, 4])
+    # unmasked_raws = tf.reshape(unmasked_raws,[num_slots, B, P, N_samples, 4])
+    # masks = tf.reshape(masks,[num_slots, B, P, N_samples, 1])
+
+    rgb_maps = raw2outputs(raws, z_vals, rays_d)
+    z_vals = tf.tile(z_vals[tf.newaxis,...], [num_slots, 1, 1, 1])
+    rays_d = tf.tile(rays_d[tf.newaxis,...], [num_slots, 1, 1, 1])
+    slots_rgb_maps = raw2outputs(masked_raws, z_vals, rays_d)
+
+    return rgb_maps, slots_rgb_maps
 
 
 class Encoder(layers.Layer):
@@ -362,12 +423,12 @@ class Decoder_nerf(layers.Layer):
 
         slots_bg =  tf.tile(slots_bg[:, None, :], [1, N, 1])
         slots_fg =  tf.tile(slots_fg[:, None, :], [1, N, 1])
-        points_bg = tf.reshape(points_bg, [-1,3])
 
 
         encoded_points_bg = self.embedding_fn(points_bg)
         encoded_points_bg = tf.reshape(encoded_points_bg, [N, self.out_dim])
         encoded_points_bg = encoded_points_bg[None, ...]
+
 
         
         points_fg = tf.reshape(points_fg, [-1,3])
@@ -390,6 +451,7 @@ class Decoder_nerf(layers.Layer):
 
 
         all_raws = tf.concat([raw_bg, raw_fg], axis=0)  # KxNx4
+
 
         raw_masks = tf.nn.relu(all_raws[:, :, -1:])  # KxNx1
         masks = raw_masks / (tf.math.reduce_sum(raw_masks,axis=0) + 1e-5)  # KxNx1
