@@ -1,9 +1,11 @@
 import torch
-from torch import nn
+from torch import nn, optim
 import torch.nn.functional as F
 from torch.nn import init
 from torchvision.models import vgg16
 from torch import autograd
+
+from itertools import chain
 
 def get_position(ray_o, ray_d, depth):
     '''
@@ -13,6 +15,7 @@ def get_position(ray_o, ray_d, depth):
     '''
 
     depth = depth[...,None]
+
 
     position = depth*ray_d+ray_o
     return position
@@ -32,6 +35,7 @@ def get_rays(H, W, focal, c2w):
 
     rays_o = c2w[:,:3, -1]
     rays_o = rays_o[:,None, None, :]
+
 
     rays_o = rays_o.expand([-1,H,W,-1])
 
@@ -146,14 +150,40 @@ def raw2outputs(raw, z_vals, rays_d):
     # sample yet.
     # [N_rays, N_samples]
     weights = alpha * torch.cumprod(1.-alpha + 1e-10, dim=-1)
+    first_column = torch.ones_like(weights[...,0:1])
+    weights = torch.cat([first_column, weights[...,:-1]], dim=-1)
 
+    
     # Computed weighted color of each sample along each ray.
     rgb_map = torch.sum(
         weights[..., None] * rgb, dim=-2)  # [N_rays, 3]
 
     return rgb_map
 
-def embedding_fn(x, n_freq=10, keep_ori=True):
+
+def raw2outputs_1(raw, z_vals, rays_d):   
+    raw2alpha = lambda x, y: 1. - torch.exp(-x * y)
+    device = raw.device
+
+    dists = z_vals[..., 1:] - z_vals[..., :-1]
+    dists = torch.cat([dists, torch.tensor([1e-2], device=device).expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
+
+    dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
+
+    rgb = raw[..., :3]
+
+    alpha = raw2alpha(raw[..., 3], dists)  # [N_rays, N_samples]
+    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1), device=device), 1. - alpha + 1e-10], -1), -1)[:,:-1]
+
+    rgb_map = torch.sum(weights[..., None] * rgb, -2)  # [N_rays, 3]
+
+    weights_norm = weights.detach() + 1e-5
+    weights_norm /= weights_norm.sum(dim=-1, keepdim=True)
+    depth_map = torch.sum(weights_norm * z_vals, -1)
+
+    return rgb_map
+
+def embedding_fn(x, n_freq=5, keep_ori=True):
     """
     create sin embedding for 3d coordinates
     input:
@@ -171,8 +201,14 @@ def embedding_fn(x, n_freq=10, keep_ori=True):
     embedded_ = torch.cat(embedded, dim=1)
     return embedded_
 
+
+def L2_loss(x,y):
+    loss = torch.mean((x-y)**2)
+    return loss
+
+
 class Encoder(nn.Module):
-    def __init__(self, cam_param, input_c=3, layers_c=64, position_emb=True, position_emb_dim=3):
+    def __init__(self, cam_param, input_c=3, layers_c=64, position_emb=False, position_emb_dim=3):
 
         super().__init__()
 
@@ -197,7 +233,7 @@ class Encoder(nn.Module):
         self.enc_down_4 = nn.Sequential(nn.Conv2d(layers_c, layers_c, 5, stride=1, padding=2),
                                         nn.ReLU(True))
 
-    def forward(self, x, depth, c2ws):
+    def forward(self, x, depth, c2ws, is_selection=False):
         """
         input:
             x: input image, Bx3xHxW
@@ -211,7 +247,9 @@ class Encoder(nn.Module):
             position = get_position(rays_o, rays_d, depth)
             x = torch.cat([x, position], dim=-1)
 
+
         x = x.permute([0,3,1,2])
+
         x_down_0 = self.enc_down_0(x)
         x_down_1 = self.enc_down_1(x_down_0)
 
@@ -294,9 +332,9 @@ class SlotAttention(nn.Module):
             slot_prev_fg = slot_fg
 
             q_slots_fg = self.to_q_fg(slot_fg)
-            q_slots_fg *= self.slot_dim ** -0.5
+            q_slots_fg = q_slots_fg*self.slot_dim ** -0.5
             q_slots_bg = self.to_q_bg(slot_bg)
-            q_slots_bg *= self.slot_dim ** -0.5
+            q_slots_bg = q_slots_bg*self.slot_dim ** -0.5
 
             attn_logits_fg = torch.matmul(k_input, q_slots_fg.T)
             attn_logits_bg = torch.matmul(k_input, q_slots_bg.T)
@@ -306,11 +344,11 @@ class SlotAttention(nn.Module):
 
             attn_bg, attn_fg = attn[:, 0:1], attn[:, 1:]  # Nx1, Nx(K-1)
             weight_bg = attn_bg + self.epsilon
-            weight_bg /= torch.sum(weight_bg, dim=-2, keepdims=True)
+            weight_bg = weight_bg / torch.sum(weight_bg, dim=-2, keepdims=True)
             updates_bg = torch.matmul(weight_bg.T, v_input)
 
             weight_fg = attn_fg + self.epsilon
-            weight_fg /= torch.sum(weight_fg, dim=-2, keepdims=True)
+            weight_fg = weight_fg / torch.sum(weight_fg, dim=-2, keepdims=True)
             updates_fg = torch.matmul(weight_fg.T, v_input)
 
 
@@ -325,8 +363,8 @@ class SlotAttention(nn.Module):
                 slot_prev_fg.reshape(-1, self.slot_dim)
             )
 
-            slot_bg += self.mlp_bg(slot_bg)
-            slot_fg += self.mlp_fg(slot_fg)
+            slot_bg = slot_bg + self.mlp_bg(slot_bg)
+            slot_fg = slot_fg + self.mlp_fg(slot_fg)
 
         slots = torch.cat([slot_bg, slot_fg], dim=0)
         return slots, attn.T
@@ -335,7 +373,7 @@ class SlotAttention(nn.Module):
 
 
 class Decoder_nerf(nn.Module):
-    def __init__(self, position_emb_dim=10, input_dim=64, mlp_hidden_size=64):
+    def __init__(self, position_emb_dim=5, input_dim=64, mlp_hidden_size=64):
         super().__init__()
 
         # self.H, self.W, self.focal=cam_param
@@ -434,6 +472,7 @@ class Decoder_nerf(nn.Module):
         raw_masks = F.relu(all_raws[:, :, -1:], True)  # KxNx1
         masks = raw_masks / (raw_masks.sum(dim=0) + 1e-5)  # KxNx1
         raw_rgb = (all_raws[:, :, :3].tanh() + 1) / 2
+        # raw_rgb = all_raws[:, :, :3]
         raw_sigma = raw_masks
 
         unmasked_raws = torch.cat([raw_rgb, raw_sigma], dim=2)  # KxNx4
@@ -445,7 +484,7 @@ class Decoder_nerf(nn.Module):
 
 
 class Encoder_Decoder_nerf():
-    def __init__(self, cam_param, num_slots = 3, num_iterations = 2):
+    def __init__(self, cam_param, num_slots = 3, num_iterations = 2, isTrain=True, lr=5e-4):
 
 
         self.num_slots = num_slots
@@ -464,7 +503,14 @@ class Encoder_Decoder_nerf():
 
         self.decoder = Decoder_nerf()
 
-    def process(self, images, depth_maps, c2ws):
+        self.isTrain = isTrain
+
+        if self.isTrain:  # only defined during training time
+            self.optimizer = optim.Adam(chain(
+                self.encoder.parameters(), self.slot_attention.parameters(), self.decoder.parameters()
+            ), lr=lr)
+
+    def forward(self, images, depth_maps, c2ws):
         '''
         input:  images: images  BxHxWx3
                 d: depth map BxHxW
@@ -473,7 +519,7 @@ class Encoder_Decoder_nerf():
         # if training[0]==1:
         #     images, depth_maps, c2ws = images[0:1], depth_maps[0:1], c2ws[0:1]
 
-
+        H, W, focal = self.cam_param
         x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
         
         x = x.permute([0,2,3,1])
@@ -488,9 +534,40 @@ class Encoder_Decoder_nerf():
 
         raws, masked_raws, unmasked_raws, masks = self.decoder(pts_bg, pts_fg, slots)
         
+
+        attn = attn.detach()
+        masked_raws = masked_raws.detach()
+        unmasked_raws =unmasked_raws.detach()
         
         raws = raws.reshape([B,N,N_samples,4])
         masked_raws = masked_raws.reshape([self.num_slots,B,N,N_samples,4])
-        raw2outputs(raws, z_vals, rays_d)
+
+        raws = raws.reshape([-1,N_samples,4])
+        z_vals = z_vals.reshape([-1,N_samples])
+        rays_d = rays_d.reshape([-1,3])
+
+        rgb = raw2outputs_1(raws, z_vals, rays_d)
+        slot_rgb = rgb # raw2outputs_1(masked_raws, z_vals, rays_d)
+        rgb = rgb.reshape([B,N,3])
+        loss_img = torch.reshape(images, [B, -1, 3])
+        self.loss = L2_loss(rgb, loss_img)
         # points sampling
-        return raws, masked_raws, unmasked_raws, masks
+
+        rgb =torch.reshape(rgb, [B, H, W, 3])
+        
+        return rgb, slot_rgb
+
+    def backward(self):
+        loss = self.loss #+ self.loss_perc
+        loss.backward()
+        
+
+    def update_grad(self, images, depth_maps, c2ws):
+
+        self.forward(images, depth_maps, c2ws)
+        self.optimizer.zero_grad()
+        self.backward()
+
+        self.optimizer.step()
+
+        return self.loss
