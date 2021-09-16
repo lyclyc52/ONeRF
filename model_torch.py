@@ -122,46 +122,7 @@ def preprocess_pts(points, num_slots):
 
 
 
-
-def raw2outputs(raw, z_vals, rays_d):
-    def raw2alpha(raw, dists): return 1.0 - torch.exp(-raw * dists)
-
-    # Compute 'distance' (in time) between each integration time along a ray.
-    dists = z_vals[..., 1:] - z_vals[..., :-1]
-
-    # The 'distance' from the last integration time is infinity.
-    inf_dis= torch.tensor(1e10)
-    dists = torch.cat(
-        [dists, inf_dis.expand(dists[..., :1].shape)],
-        dim=-1)  # [N_rays, N_samples]
-
-    # Multiply each distance by the norm of its corresponding direction ray
-    # to convert to real world distance (accounts for non-unit directions).
-    dists = dists * torch.linalg.norm(rays_d[..., None, :], dim=-1)
-
-    # Extract RGB of each sample position along each ray.
-    rgb = torch.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
-
-
-    alpha = raw2alpha(raw[..., 3], dists)  # [N_rays, N_samples]
-
-    # Compute weight for RGB of each sample along each ray.  A cumprod() is
-    # used to express the idea of the ray not having reflected up to this
-    # sample yet.
-    # [N_rays, N_samples]
-    weights = alpha * torch.cumprod(1.-alpha + 1e-10, dim=-1)
-    first_column = torch.ones_like(weights[...,0:1])
-    weights = torch.cat([first_column, weights[...,:-1]], dim=-1)
-
-    
-    # Computed weighted color of each sample along each ray.
-    rgb_map = torch.sum(
-        weights[..., None] * rgb, dim=-2)  # [N_rays, 3]
-
-    return rgb_map
-
-
-def raw2outputs_1(raw, z_vals, rays_d):   
+def raw2outputs(raw, z_vals, rays_d):   
     raw2alpha = lambda x, y: 1. - torch.exp(-x * y)
     device = raw.device
 
@@ -173,7 +134,8 @@ def raw2outputs_1(raw, z_vals, rays_d):
     rgb = raw[..., :3]
 
     alpha = raw2alpha(raw[..., 3], dists)  # [N_rays, N_samples]
-    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1), device=device), 1. - alpha + 1e-10], -1), -1)[:,:-1]
+
+    weights = alpha * torch.cumprod(torch.cat([torch.ones_like(alpha[...,0:1], device=device), 1. - alpha + 1e-10], -1), -1)[...,:-1]
 
     rgb_map = torch.sum(weights[..., None] * rgb, -2)  # [N_rays, 3]
 
@@ -510,7 +472,7 @@ class Encoder_Decoder_nerf():
                 self.encoder.parameters(), self.slot_attention.parameters(), self.decoder.parameters()
             ), lr=lr)
 
-    def forward(self, images, depth_maps, c2ws):
+    def forward(self, images, depth_maps, c2ws, isTrain=True):
         '''
         input:  images: images  BxHxWx3
                 d: depth map BxHxW
@@ -535,25 +497,24 @@ class Encoder_Decoder_nerf():
         raws, masked_raws, unmasked_raws, masks = self.decoder(pts_bg, pts_fg, slots)
         
 
-        attn = attn.detach()
-        masked_raws = masked_raws.detach()
-        unmasked_raws =unmasked_raws.detach()
         
         raws = raws.reshape([B,N,N_samples,4])
         masked_raws = masked_raws.reshape([self.num_slots,B,N,N_samples,4])
 
-        raws = raws.reshape([-1,N_samples,4])
-        z_vals = z_vals.reshape([-1,N_samples])
-        rays_d = rays_d.reshape([-1,3])
+        # raws = raws.reshape([-1,N_samples,4])
+        # z_vals = z_vals.reshape([-1,N_samples])
+        # rays_d = rays_d.reshape([-1,3])
 
-        rgb = raw2outputs_1(raws, z_vals, rays_d)
-        slot_rgb = rgb # raw2outputs_1(masked_raws, z_vals, rays_d)
-        rgb = rgb.reshape([B,N,3])
+        rgb = raw2outputs(raws, z_vals, rays_d)
+        slot_rgb = raw2outputs(masked_raws, z_vals, rays_d)
         loss_img = torch.reshape(images, [B, -1, 3])
         self.loss = L2_loss(rgb, loss_img)
         # points sampling
 
-        rgb =torch.reshape(rgb, [B, H, W, 3])
+
+        if !isTrain:
+            rgb =torch.reshape(rgb, [B, H, W, 3])
+            slot_rgb = torch.reshape(slot_rgb, [B, H, W, 3])
         
         return rgb, slot_rgb
 

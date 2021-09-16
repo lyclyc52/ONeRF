@@ -60,7 +60,7 @@ for i in range(0, train_iters):
         val = 0
         val_images, val_depths, val_poses = images[val:val+1], depth_maps[val:val+1], poses[val:val+1]
         with torch.no_grad():
-            rgb,_ = model.forward(val_images, val_depths, val_poses)
+            rgb,_ = model.forward(val_images, val_depths, val_poses, isTrain=False)
             rgb = rgb.numpy()
 
             val_images = val_images.numpy()
