@@ -7,6 +7,9 @@ from torch import autograd
 
 from itertools import chain
 
+from torchvision.transforms import Normalize
+import os
+
 def get_position(ray_o, ray_d, depth):
     '''
     input: ray origin, ray direction, depth
@@ -259,6 +262,52 @@ class Encoder(nn.Module):
 
         return x_down_4
 
+class Encoder_VGG(nn.Module):
+    def __init__(self, cam_param, input_c=3, layers_c=64, position_emb=False, position_emb_dim=3):
+
+        super().__init__()
+
+        vgg_features = vgg16(pretrained=True).features
+        self.feature_extractor = nn.Sequential()
+        for i in range(16):
+            self.feature_extractor.add_module(str(i), vgg_features[i])
+        for param in self.feature_extractor.parameters():
+            param.require_gard = False
+        self.vgg_preprocess = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        self.upsample = nn.Upsample(scale_factor=4)
+
+        self.input_c=input_c
+        self.layers_c=layers_c
+        self.position_emb=position_emb
+        self.position_emb_dim=position_emb_dim
+
+
+        self.H, self.W, self.focal=cam_param
+        if self.position_emb:
+            self.input_c = self.input_c + position_emb_dim
+
+    def forward(self, x, depth, c2ws, is_selection=False):
+        """
+        input:
+            x: input image, BxHxWx3
+        output:
+            feature_map: BxCxHxW
+        """
+        x = x.permute([0,3,1,2])
+        x = self.vgg_preprocess(x)
+        x = self.feature_extractor(x)
+        x = self.upsample(x)
+        x = x.permute([0,2,3,1])
+
+        if self.position_emb:
+            rays_o, rays_d = get_rays(self.H, self.W, self.focal, c2ws) 
+            position = get_position(rays_o, rays_d, depth)
+            x = torch.cat([x, position], dim=-1)
+
+        x = x.permute([0,3,1,2])
+
+        return x
 
 class SlotAttention(nn.Module):
     def __init__(self, num_iterations=2, num_slots=3, in_dim=64, slot_dim=64, mlp_hidden_size=128, epsilon=1e-8):
@@ -492,11 +541,12 @@ class Encoder_Decoder_nerf():
 
         self.cam_param = cam_param
 
-        self.encoder = Encoder(cam_param)
+        self.encoder = Encoder_VGG(cam_param)
 
         self.slot_attention = SlotAttention(
             num_iterations=self.num_iterations,
             num_slots=self.num_slots,
+            in_dim = 256,
             slot_dim=64,
             mlp_hidden_size=128)
         
@@ -571,3 +621,11 @@ class Encoder_Decoder_nerf():
         self.optimizer.step()
 
         return self.loss
+
+    def save_weights(self, path, i):
+        torch.save(self.slot_attention.state_dict(), os.path.join(path, 'slot_{:6d}.pt'.format(i)))
+        torch.save(self.decoder.state_dict(), os.path.join(path, 'decoder_{:6d}.pt'.format(i)))
+
+    def load_weights(self, path, i):
+        self.slot_attention.load_state_dict(torch.load(os.path.join(path,'slot_{:6d}.pt'.format(i))))
+        self.decoder.load_state_dict(torch.load(os.path.join(path,'decoder_{:6d}.pt'.format(i))))
