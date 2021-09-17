@@ -562,9 +562,9 @@ class Encoder_Decoder_nerf():
         # points sampling
 
 
-        if !isTrain:
+        if isTrain == False:
             rgb =torch.reshape(rgb, [B, H, W, 3])
-            slot_rgb = torch.reshape(slot_rgb, [B, H, W, 3])
+            slot_rgb = torch.reshape(slot_rgb, [self.num_slots, B, H, W, 3])
         
         return rgb, slot_rgb
 

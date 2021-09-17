@@ -11,3 +11,4 @@ logs/*
 *.jpg
 *ckpt-*
 *checkpoint*
+*.pt
