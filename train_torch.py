@@ -31,20 +31,19 @@ model = Encoder_Decoder_nerf(hwf)
 
 train_iters = 10000000
 
-N_print=100
+N_print=25
 
 N_imgs = 100
-N_img = 500
+N_img = 100
 
 images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
 images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
 
 print('Start training')
 for i in range(0, train_iters):
-    t = np.random.randint(0, N_imgs)
-    t = 0
-    input_images, input_depths, input_poses = images[t:t+1], depth_maps[t:t+1], poses[t:t+1]
-    loss = model.update_grad(input_images, input_depths, input_poses)
+    t = np.random.randint(0, N_imgs,4)
+    input_images, input_depths, input_poses = images[t], depth_maps[t], poses[t]
+    loss = model.update_grad(input_images, input_depths, input_poses, i)
     
     if i % N_print == 0:
         print('iter: {:06d},  loss: {:f}'.format(i, loss))
@@ -56,15 +55,17 @@ for i in range(0, train_iters):
     
 
     if i % N_img == 0: 
-        val = np.random.randint(0, N_imgs)
-        val = 0
-        val_images, val_depths, val_poses = images[val:val+1], depth_maps[val:val+1], poses[val:val+1]
+        val = np.random.randint(0, N_imgs, 4)
+        val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
         with torch.no_grad():
-            rgb,_ = model.forward(val_images, val_depths, val_poses, isTrain=False)
+            rgb,rgb_slots = model.forward(val_images, val_depths, val_poses, isTrain=False)
             rgb = rgb.numpy()
+            rgb_slots = rgb_slots.numpy()
 
             val_images = val_images.numpy()
             imageio.imwrite(os.path.join('./imgs_1/val_{:06d}.jpg'.format(i)), to8b(rgb[0]))
+            for j in range(3):
+                imageio.imwrite(os.path.join('./imgs_1/val_slot{:01d}_{:06d}.jpg'.format(j,i)), to8b(rgb_slots[j][0]))
 
         # imageio.imwrite(os.path.join('./imgs_1/gt_{:06d}.jpg'.format(i)), to8b(val_images[0]))
 

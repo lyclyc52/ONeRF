@@ -12,3 +12,5 @@ logs/*
 *ckpt-*
 *checkpoint*
 *.pt
+*results*
+*.tmp
