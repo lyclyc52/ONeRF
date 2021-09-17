@@ -89,10 +89,10 @@ def sampling_points(cam_param, c2w, N_samples=64, near=4., far=14., is_selection
         # z_vals = torch.gather_nd(z_vals, select_inds, batch_dims = 1)
         # rays_d = torch.gather_nd(rays_d, select_inds, batch_dims = 1)
         
-        select_inds_x = np.random.randint(0,64)
-        select_inds_y = np.random.randint(0,64)
+        select_inds_x = torch.randint(0,64,(1,))
+        select_inds_y = torch.randint(0,64,(1,))
 
-        select_inds = [select_inds_x, select_inds_y]
+        select_inds = [select_inds_x, select_inds_y, N_selection]
 
         pts = pts[:,select_inds_x:select_inds_x+N_selection, select_inds_y:select_inds_y+N_selection,...]
         z_vals = z_vals[:,select_inds_x:select_inds_x+N_selection, select_inds_y:select_inds_y+N_selection,...]
@@ -397,6 +397,8 @@ class Decoder_nerf(nn.Module):
 
 
 
+
+
         self.decoder_mlp_bg_layer_0 = nn.Sequential(
             nn.Linear(input_dim, mlp_hidden_size), 
             nn.ReLU(True),
@@ -515,6 +517,9 @@ class Encoder_Decoder_nerf():
 
         self.decoder = Decoder_nerf()
 
+        
+        self.k_o = 0.05
+
         self.isTrain = isTrain
 
         if self.isTrain:  # only defined during training time
@@ -538,8 +543,10 @@ class Encoder_Decoder_nerf():
         x = torch.reshape(x, [-1, x.shape[-1]])
 
         slots, attn = self.slot_attention(x) # (N_slots, slot_size)
-        
-        pts, z_vals,rays_d = sampling_points(self.cam_param, c2ws)
+        if isTrain==True:
+            pts, z_vals, rays_d, select_inds = sampling_points(self.cam_param, c2ws, is_selection=True)
+        else:
+            pts, z_vals,rays_d = sampling_points(self.cam_param, c2ws)
         B,N,N_samples,_ = pts.shape
         pts_bg, pts_fg = preprocess_pts(pts, self.num_slots)
 
@@ -547,9 +554,10 @@ class Encoder_Decoder_nerf():
         raws, masked_raws, unmasked_raws, masks = self.decoder(pts_bg, pts_fg, slots)
         
 
-        
         raws = raws.reshape([B,N,N_samples,4])
         masked_raws = masked_raws.reshape([self.num_slots,B,N,N_samples,4])
+
+
 
         # raws = raws.reshape([-1,N_samples,4])
         # z_vals = z_vals.reshape([-1,N_samples])
@@ -557,36 +565,62 @@ class Encoder_Decoder_nerf():
 
         rgb = raw2outputs(raws, z_vals, rays_d)
         slot_rgb = raw2outputs(masked_raws, z_vals, rays_d)
-        loss_img = torch.reshape(images, [B, -1, 3])
-        self.loss = L2_loss(rgb, loss_img)
+
+        if isTrain==True:
+            select_inds_x, select_inds_y, N_selection = select_inds
+            loss_img = images[:,select_inds_x:select_inds_x+N_selection, select_inds_y:select_inds_y+N_selection,...]
+            loss_img = torch.reshape(loss_img, [B, -1, 3])
+            self.loss = L2_loss(rgb, loss_img)
+            
+            masked_raws_sigma = masked_raws[..., -1:]
+            max_sigma,_ = masked_raws_sigma.permute([1,2,3,4,0]).max(dim=-1)
+            self.overlap_loss = torch.sum(raws[...,-1:]-max_sigma)
+            
         # points sampling
 
 
-        if !isTrain:
+        if isTrain==False:
             rgb =torch.reshape(rgb, [B, H, W, 3])
-            slot_rgb = torch.reshape(slot_rgb, [B, H, W, 3])
+            slot_rgb = torch.reshape(slot_rgb, [self.num_slots, B, H, W, 3])
         
+
+
         return rgb, slot_rgb
 
-    def backward(self):
-        loss = self.loss #+ self.loss_perc
+    def backward(self, iter):
+
+
+        loss = self.loss 
+
+        if iter >=10000:
+            k_o = max(1, iter-10000/10000) * self.k_o
+            loss = loss + k_o * self.overlap_loss
         loss.backward()
         
 
-    def update_grad(self, images, depth_maps, c2ws):
+    def update_grad(self, images, depth_maps, c2ws, iter):
 
         self.forward(images, depth_maps, c2ws)
         self.optimizer.zero_grad()
-        self.backward()
+        self.backward(iter)
 
         self.optimizer.step()
 
         return self.loss
 
     def save_weights(self, path, i):
-        torch.save(self.slot_attention.state_dict(), os.path.join(path, 'slot_{:6d}.pt'.format(i)))
-        torch.save(self.decoder.state_dict(), os.path.join(path, 'decoder_{:6d}.pt'.format(i)))
+
+        torch.save({
+            'epoch': i,
+            'slot_attention_state_dict': self.slot_attention.state_dict(),
+            'decoder_state_dict': self.decoder.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'loss': self.loss,
+            }, os.path.join(path,'model_{:08d}.pt'.format(i)))
+
 
     def load_weights(self, path, i):
-        self.slot_attention.load_state_dict(torch.load(os.path.join(path,'slot_{:6d}.pt'.format(i))))
-        self.decoder.load_state_dict(torch.load(os.path.join(path,'decoder_{:6d}.pt'.format(i))))
+        checkpoint = torch.load(os.path.join(path,'model_{:08d}.pt'.format(i)))
+        self.slot_attention.load_state_dict(checkpoint['slot_attention_state_dict'])
+        self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
