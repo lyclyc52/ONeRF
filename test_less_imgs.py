@@ -1,6 +1,6 @@
 import os
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ["CUDA_VISIBLE_DEVICES"]='7'
+os.environ["CUDA_VISIBLE_DEVICES"]='5'
 from model_torch import *
 from load_blender import *
 from run_nerf_helpers import *
@@ -15,8 +15,8 @@ depth_maps = depth_maps[..., None]
 depth_maps = tf.compat.v1.image.resize_area(depth_maps, [128, 128]).numpy()
 depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
 
-weights_dir = './weights_new_loss'
-imgs_dir = './imgs_new_loss'
+weights_dir = './weights_less_imgs'
+imgs_dir = './imgs_less_imgs'
 os.makedirs(imgs_dir, exist_ok=True)
 os.makedirs(weights_dir, exist_ok=True)
 
@@ -30,15 +30,17 @@ images, poses, render_poses, hwf, i_split = load_blender_data(
 
 
 model = Encoder_Decoder_nerf(hwf)
-start_iter = 99000
+start_iter = 40000
 model.load_weights(weights_dir, start_iter)
+
+# model.load_weights(weights_dir,2000)
 
 
 train_iters = 10000000
 
 N_print=10
 N_save = 500
-N_imgs = 20
+N_imgs = 8
 N_save_img = 200
 N_input_img = 1
 
@@ -47,6 +49,7 @@ images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_map
 
 device = torch.device("cuda:0")  
 images, depth_maps, poses = images.to(device), depth_maps.to(device), poses.to(device)
+
 
 print('Start training')
 for i in range(start_iter, train_iters):

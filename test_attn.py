@@ -15,32 +15,26 @@ depth_maps = depth_maps[..., None]
 depth_maps = tf.compat.v1.image.resize_area(depth_maps, [128, 128]).numpy()
 depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
 
-weights_dir = './weights_new_loss'
-imgs_dir = './imgs_new_loss'
+weights_dir = './weights_attn'
+imgs_dir = './imgs_attn'
 os.makedirs(imgs_dir, exist_ok=True)
 os.makedirs(weights_dir, exist_ok=True)
 
 parser = config_parser()
 args = parser.parse_args()
 
-N_train = depth_maps.shape[0]
-
-images, poses, render_poses, hwf, i_split = load_blender_data(
-            args.datadir, args.half_res, args.testskip)
-
-
-model = Encoder_Decoder_nerf(hwf)
-start_iter = 99000
-model.load_weights(weights_dir, start_iter)
-
-
 train_iters = 10000000
 
 N_print=10
 N_save = 500
-N_imgs = 20
-N_save_img = 200
+N_imgs = 8
+N_save_img = 500
 N_input_img = 1
+start_iter = 0
+
+images, poses, render_poses, hwf, i_split = load_blender_data(
+            args.datadir, args.half_res, args.testskip)
+
 
 images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
 images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
@@ -48,11 +42,14 @@ images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_map
 device = torch.device("cuda:0")  
 images, depth_maps, poses = images.to(device), depth_maps.to(device), poses.to(device)
 
+model = Encoder_Decoder_nerf_attn(hwf, num_images=N_imgs, c2ws_all=poses, depth_all=depth_maps)
+# model.load_weights(weights_dir, start_iter)
+
 print('Start training')
 for i in range(start_iter, train_iters):
     t = np.random.randint(0, N_imgs, N_input_img)
     input_images, input_depths, input_poses = images[t], depth_maps[t], poses[t]
-    loss = model.update_grad(input_images, input_depths, input_poses, i)
+    loss = model.update_grad(input_images, input_depths, input_poses, i, img_id=t)
     
     if i % N_print == 0:
         print('iter: {:06d},  loss: {:f}'.format(i, loss))
@@ -67,7 +64,7 @@ for i in range(start_iter, train_iters):
         val = np.random.randint(0, N_imgs, N_input_img)
         val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
         with torch.no_grad():
-            rgb, slots_rgb = model.forward(val_images, val_depths, val_poses, isTrain=False)
+            rgb, slots_rgb = model.forward(val_images, val_depths, val_poses, isTrain=False, img_id=val)
             rgb, slots_rgb = rgb.cpu().numpy(), slots_rgb.cpu().numpy()
 
             val_images = val_images.cpu().numpy()
