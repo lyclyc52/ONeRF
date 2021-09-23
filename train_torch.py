@@ -1,7 +1,7 @@
 
 import os
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ["CUDA_VISIBLE_DEVICES"]='1,2'
+os.environ["CUDA_VISIBLE_DEVICES"]='4,8'
 from model_torch import *
 from load_blender import *
 from run_nerf_helpers import *
@@ -42,7 +42,8 @@ images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_map
 print('Start training')
 for i in range(0, train_iters):
     t = np.random.randint(0, N_imgs,4)
-    input_images, input_depths, input_poses = images[t], depth_maps[t], poses[t]
+    t = 0
+    input_images, input_depths, input_poses = images[t:t+1], depth_maps[t:t+1], poses[t:t+1]
     loss = model.update_grad(input_images, input_depths, input_poses, i)
     
     if i % N_print == 0:
@@ -56,7 +57,8 @@ for i in range(0, train_iters):
 
     if i % N_img == 0: 
         val = np.random.randint(0, N_imgs, 4)
-        val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
+        val = 0
+        val_images, val_depths, val_poses = images[val:val+1], depth_maps[val:val+1], poses[val:val+1]
         with torch.no_grad():
             rgb,rgb_slots = model.forward(val_images, val_depths, val_poses, isTrain=False)
             rgb = rgb.numpy()
