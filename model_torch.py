@@ -504,8 +504,18 @@ class Decoder_nerf_ind(nn.Module):
             nn.ReLU(True),
             nn.Linear(mlp_hidden_size, mlp_hidden_size), 
             nn.ReLU(True),
-            nn.Linear(mlp_hidden_size, 4), 
+            nn.Linear(mlp_hidden_size, mlp_hidden_size), 
             nn.ReLU(True))
+
+        self.decoder_density = nn.Linear(mlp_hidden_size, 1)
+
+        self.decoder_latent = nn.Linear(mlp_hidden_size, mlp_hidden_size)
+        self.decoder_color = nn.Sequential(nn.Linear(mlp_hidden_size, mlp_hidden_size//4),
+                                     nn.ReLU(True),
+                                     nn.Linear(mlp_hidden_size//4, 3))
+
+
+        
 
 
     def forward(self, pts, slots):
@@ -528,15 +538,21 @@ class Decoder_nerf_ind(nn.Module):
         output = []
         for i in range(0, input.shape[0], chunk):
             tmp = self.decoder_mlp_layer_0(input[i:i+chunk])
-            output_c = self.decoder_mlp_layer_1(torch.cat([input[i:i+chunk],tmp], dim=-1))
-            output.append(output_c)
+            tmp = self.decoder_mlp_layer_1(torch.cat([input[i:i+chunk],tmp], dim=-1))
 
+            raw_density = self.decoder_density(tmp)
+            latent = self.decoder_latent(tmp)  
+            raw_color = self.decoder_color(latent)  
+             
+            output_c = torch.cat([raw_color,raw_density], dim=1)
+
+            output.append(output_c)
 
         output = torch.cat(output, dim=0)
 
         all_raws = torch.reshape(output, [K, N, 4])
 
-        raw_masks = F.relu(all_raws[:, :, -1:])  # KxNx1
+        raw_masks = F.relu(all_raws[:, :, -1:], True)  # KxNx1
         masks = raw_masks / (raw_masks.sum(dim=0) + 1e-5)  # KxNx1
         raw_rgb = (all_raws[:, :, :3].tanh() + 1) / 2
 
@@ -582,8 +598,6 @@ class Decoder_nerf_ind_v2(nn.Module):
 
         tmp = self.decoder_mlp_layer_0(input)
         output_c = self.decoder_mlp_layer_1(torch.cat([input,tmp], dim=-1))
-
-
 
 
         
@@ -728,7 +742,7 @@ class Encoder_Decoder_nerf():
         else:
             # self.decoder = Decoder_nerf(self.device)
             # self.decoder.to(self.device)
-            self.decoder = Decoder_nerf_ind_v2(self.device)
+            self.decoder = Decoder_nerf_ind(self.device)
             self.decoder.to(self.device)
 
         
@@ -756,6 +770,14 @@ class Encoder_Decoder_nerf():
         depth_maps = depth_maps.to(self.device)
         c2ws = c2ws.to(self.device)
         x = self.encoder(images, depth_maps, c2ws) # (B,H',W',C)
+
+
+        # check = np.random.randint(0,4)
+        # input_images = images[check:check+1]
+        # input_depth_maps = depth_maps[check:check+1]
+        # input_c2ws = c2ws[check:check+1]
+        # x = self.encoder(input_images, input_depth_maps, input_c2ws) # (B,H',W',C)
+
         
         x = x.permute([0,2,3,1])
         x = torch.reshape(x, [-1, x.shape[-1]])
@@ -770,73 +792,81 @@ class Encoder_Decoder_nerf():
             pts, z_vals,rays_d = sampling_points(self.cam_param, c2ws)
 
 
-        #{
-        chunk = 128*128
         B,N,N_samples,_ = pts.shape
 
-        pts = pts.reshape([-1,3])
-        emb_pts = embedding_fn(pts)
-        emb_pts = emb_pts[None,...]
-        emb_pts = emb_pts.expand([self.num_slots,-1,-1])
+        # {
 
-        slots = slots[:,None,:]
-        num_p = emb_pts.shape[1]
-        slots = slots.expand([-1, num_p, -1])
-        input = torch.cat([emb_pts, slots], dim=-1)
-        input = input.reshape([-1, input.shape[-1]])
+        # chunk = 128*128
 
-        for i in range(0, input.shape[0],chunk):
-            all_raw = self.decoder(input[i:i+chunk])
-            if i == 0:
-                all_raws = all_raw
-            else:
-                all_raws = torch.cat([all_raws, all_raw], dim=0)
-        all_raws = all_raws.reshape([self.num_slots, num_p, 4])
+        # pts = pts.reshape([-1,3])
+        # emb_pts = embedding_fn(pts)
+        # emb_pts = emb_pts[None,...]
+        # emb_pts = emb_pts.expand([self.num_slots,-1,-1])
 
+        # slots = slots[:,None,:]
+        # num_p = emb_pts.shape[1]
+        # slots = slots.expand([-1, num_p, -1])
+        # input = torch.cat([emb_pts, slots], dim=-1)
+        # input = input.reshape([-1, input.shape[-1]])
 
-        # pts_bg, pts_fg = preprocess_pts(pts, self.num_slots)
-        # for i in range(0, pts_bg.shape[0],chunk):
-        #     all_raw = self.decoder(pts_bg[i:i+chunk,...], pts_fg[:, i:i+chunk,...], slots)
+        # for i in range(0, input.shape[0],chunk):
+        #     all_raw = self.decoder(input[i:i+chunk])
         #     if i == 0:
         #         all_raws = all_raw
         #     else:
-        #         all_raws = torch.cat([all_raws, all_raw], dim=1)
+        #         all_raws = torch.cat([all_raws, all_raw], dim=0)
+        # all_raws = all_raws.reshape([self.num_slots, num_p, 4])
 
-        raw_masks = F.relu(all_raws[:, :, -1:])  # KxNx1
 
-        masks = raw_masks / (raw_masks.sum(dim=0) + 1e-5)  # KxNx1
-        raw_rgb = (all_raws[:, :, :3].tanh() + 1.) / 2.
-        raw_sigma = raw_masks
+        # # pts_bg, pts_fg = preprocess_pts(pts, self.num_slots)
+        # # for i in range(0, pts_bg.shape[0],chunk):
+        # #     all_raw = self.decoder(pts_bg[i:i+chunk,...], pts_fg[:, i:i+chunk,...], slots)
+        # #     if i == 0:
+        # #         all_raws = all_raw
+        # #     else:
+        # #         all_raws = torch.cat([all_raws, all_raw], dim=1)
 
-        unmasked_raws = torch.cat([raw_rgb, raw_sigma], dim=2)  # KxNx4
-        masked_raws = unmasked_raws * masks
-        raws = masked_raws.sum(dim=0)
+        # raw_masks = F.relu(all_raws[:, :, -1:], True)  # KxNx1
+
+        # masks = raw_masks / (raw_masks.sum(dim=0) + 1e-5)  # KxNx1
+        # raw_rgb = (all_raws[:, :, :3].tanh() + 1.) / 2.
+        # raw_sigma = raw_masks
+
+        # unmasked_raws = torch.cat([raw_rgb, raw_sigma], dim=2)  # KxNx4
+        # masked_raws = unmasked_raws * masks
+        # raws = masked_raws.sum(dim=0)
         
+
+        # }
+
+
+
+        # {
+        pts = pts[None,...]
+        pts = pts.expand([self.num_slots, -1, -1, -1, -1])
+
+        pts = torch.reshape(pts, [self.num_slots, -1, 3])
+
+        raws, masked_raws, unmasked_raws, masks = self.decoder(pts, slots)
+
+
+        # }
+
+
+
+
+
         raws = raws.reshape([B,N,N_samples,4])
         masked_raws = masked_raws.reshape([self.num_slots,B,N,N_samples,4])
         unmasked_raws = unmasked_raws.reshape([self.num_slots,B,N,N_samples,4])
 
-        #}
-
-
-        # pts = pts[None,...]
-        # pts = pts.expand([self.num_slots, -1, -1, -1, -1])
-
-        # pts = torch.reshape(pts, [self.num_slots, -1, 3])
-
-        # raws, masked_raws, unmasked_raws, masks = self.decoder(pts, slots)
-
-
-        # raws = raws.reshape([B,N,N_samples,4])
-        # masked_raws = masked_raws.reshape([self.num_slots,B,N,N_samples,4])
-        # unmasked_raws = unmasked_raws.reshape([self.num_slots,B,N,N_samples,4])
-        
-        # raws = raws.reshape([-1,N_samples,4])
-        # z_vals = z_vals.reshape([-1,N_samples])
-        # rays_d = rays_d.reshape([-1,3])
+        raws = raws.reshape([-1,N_samples,4])
+        z_vals = z_vals.reshape([-1,N_samples])
+        rays_d = rays_d.reshape([-1,3])
 
 
         rgb = raw2outputs(raws, z_vals, rays_d)
+        rgb = rgb.reshape([B,N,3])
 
 
 
@@ -848,7 +878,7 @@ class Encoder_Decoder_nerf():
             loss_img = loss_img[:,select_inds,...]
             self.loss = L2_loss(rgb, loss_img)
 
-            return
+            return 
             
             # masked_raws_sigma = masked_raws[..., -1:]
             # max_sigma,_ = masked_raws_sigma.permute([1,2,3,4,0]).max(dim=-1)
@@ -861,12 +891,14 @@ class Encoder_Decoder_nerf():
             slot_masked_rgb = []
             for s in range(self.num_slots):
                 slot_mask_raws = masked_raws[s]
-                slot_masked_rgb.append(raw2outputs(slot_mask_raws, z_vals, rays_d))
+                slot_mask_raws = slot_mask_raws.reshape([-1,N_samples,4])
+                slot_masked_rgb.append(raw2outputs(slot_mask_raws, z_vals, rays_d).reshape([B,N,3]))
 
             slot_unmasked_rgb = []
             for s in range(self.num_slots):
                 slot_unmask_raws = unmasked_raws[s]
-                slot_unmasked_rgb.append(raw2outputs(slot_unmask_raws, z_vals, rays_d))
+                slot_unmask_raws = slot_unmask_raws.reshape([-1,N_samples,4])
+                slot_unmasked_rgb.append(raw2outputs(slot_unmask_raws, z_vals, rays_d).reshape([B,N,3]))
 
             rgb = torch.reshape(rgb, [B, H, W, 3])
             for s in range(self.num_slots):

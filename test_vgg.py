@@ -1,7 +1,7 @@
 
 import os
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ["CUDA_VISIBLE_DEVICES"]='6,7'
+os.environ["CUDA_VISIBLE_DEVICES"]='8'
 from model_torch import *
 from load_blender import *
 from run_nerf_helpers import *
@@ -16,8 +16,8 @@ depth_maps = depth_maps[..., None]
 depth_maps = tf.compat.v1.image.resize_area(depth_maps, [128, 128]).numpy()
 depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
 
-weights_dir = './results/testing_1/weights'
-img_dir = './results/testing_1/imgs'
+weights_dir = './results/testing_5/weights'
+img_dir = './results/testing_5/imgs'
 
 
 os.makedirs(weights_dir, exist_ok=True)
@@ -45,7 +45,7 @@ train_iters = 10000000
 N_print = 100
 N_save = 500
 N_imgs = 100
-N_img = 500
+N_img = 100
 
 images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
 images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
@@ -53,7 +53,7 @@ images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_map
 print('Start training')
 for i in range(start_iter, train_iters):
     t = np.random.randint(0, 20, 1)
-    t = [0, 1, 2, 3]
+    t = [0, 4, 25, 47]
 
     input_images, input_depths, input_poses = images[t], depth_maps[t], poses[t]
     # for a in range(4):
@@ -70,7 +70,7 @@ for i in range(start_iter, train_iters):
 
     if i % N_img == 0: 
         val = np.random.randint(0, 20, )
-        val = [0, 1, 2, 3]
+        val = [0, 4, 25, 47]
         check = np.random.randint(0, 4)
         val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
         with torch.no_grad():
