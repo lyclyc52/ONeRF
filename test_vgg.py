@@ -1,6 +1,6 @@
 import os
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ["CUDA_VISIBLE_DEVICES"]='5,6'
+os.environ["CUDA_VISIBLE_DEVICES"]='8'
 from model_torch import *
 from load_blender import *
 from run_nerf_helpers import *
@@ -15,8 +15,8 @@ depth_maps = depth_maps[..., None]
 depth_maps = tf.compat.v1.image.resize_area(depth_maps, [128, 128]).numpy()
 depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
 
-weights_dir = './testing_overlap_loss_single_nerf/weights_overlap_loss'
-img_dir = './testing_overlap_loss_single_nerf/imgs_overlap_loss'
+weights_dir = './results/testing_5/weights'
+img_dir = './results/testing_5/imgs'
 
 
 os.makedirs(weights_dir, exist_ok=True)
@@ -44,14 +44,16 @@ train_iters = 10000000
 N_print=100
 N_save = 100
 N_imgs = 100
-N_img = 200
+N_img = 100
 
 images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
 images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
 
 print('Start training')
 for i in range(start_iter, train_iters):
-    t = np.random.randint(0, N_imgs,4)
+    t = np.random.randint(0, 20, 1)
+    t = [0, 4, 25, 47]
+
     input_images, input_depths, input_poses = images[t], depth_maps[t], poses[t]
     loss = model.update_grad(input_images, input_depths, input_poses, i)
 
@@ -65,7 +67,9 @@ for i in range(start_iter, train_iters):
 
 
     if i % N_img == 0: 
-        val = np.random.randint(0, N_imgs, 4)
+        val = np.random.randint(0, 20, )
+        val = [0, 4, 25, 47]
+        check = np.random.randint(0, 4)
         val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
         with torch.no_grad():
             rgb,rgb_slots = model.forward(val_images, val_depths, val_poses, isTrain=False)

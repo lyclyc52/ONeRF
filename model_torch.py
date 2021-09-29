@@ -927,9 +927,9 @@ class Encoder_Decoder_nerf():
         loss.backward()
         
 
-    def update_grad(self, images, depth_maps, c2ws, iter):
+    def update_grad(self, images, depth_maps, c2ws, iter, img_id=None):
 
-        self.forward(images, depth_maps, c2ws)
+        self.forward(images, depth_maps, c2ws, img_id=img_id)
 
 
         self.optimizer.zero_grad()
