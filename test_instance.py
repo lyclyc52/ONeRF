@@ -1,7 +1,7 @@
 import os
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 os.environ["CUDA_VISIBLE_DEVICES"]='8'
-from model_torch import *
+from model_instance import *
 from load_blender import *
 from run_nerf_helpers import *
 from run_nerf import *
@@ -15,8 +15,8 @@ depth_maps = depth_maps[..., None]
 depth_maps = tf.compat.v1.image.resize_area(depth_maps, [256, 256]).numpy()
 depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
 
-weights_dir = './results/testing_3/weights'
-img_dir = './results/testing_3/imgs'
+weights_dir = './results/testing_1/weights'
+img_dir = './results/testing_1/imgs'
 
 
 os.makedirs(weights_dir, exist_ok=True)
