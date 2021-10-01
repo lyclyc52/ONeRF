@@ -49,21 +49,11 @@ def load_blender_data(basedir, size=-1, device='cuda:0'):
 
 # load img
 img_size = args.img_size
-N_imgs = 1
+N_imgs = 10
 img_dir = './data/nerf_synthetic/clevr_100_2objects'
 device = 'cuda:0'
 images = load_blender_data(img_dir, size=img_size)[:N_imgs]
 
-# mask
-mask = np.zeros((1, 800, 800))
-mask[0, 470:515, 315:365] = 128
-mask[0, 295:355, 453:525] = 255
-mask = torch.from_numpy(mask).to(device)
-mask = TF.resize(mask,size=img_size)
-mask = mask.reshape((-1,)).cpu().numpy()
-id0 = (mask == 0)
-id1 = (mask == 128)
-id2 = (mask == 255)
 
 # vgg process
 vgg_features = vgg16(pretrained=True).features
@@ -80,29 +70,24 @@ feature_maps = x.permute([0,2,3,1])
 
 
 # PCA torch
-feat = feature_maps[0]
-feat = feat.reshape((-1, feat.shape[-1]))
-U, S, V = torch.pca_lowrank(feat, center=True)
-low_dim_feat = feat @ V[:, :3]
-print(low_dim_feat.shape)
-low_dim_feat = low_dim_feat.detach().cpu().numpy()
+for i in range(feature_maps.shape[0]):
+    feat = feature_maps[i]
+    feat = feat.reshape((-1, feat.shape[-1]))
+    mean = feat.mean(dim=1, keepdim=True)
+    std = feat.std(dim=1, keepdim=True)
+    feat = (feat - mean) / std
+    U, S, V = torch.pca_lowrank(feat, center=False)
+    low_dim_feat = feat @ V[:, :3]
+    print(low_dim_feat.shape)
+    low_dim_feat = low_dim_feat.detach().cpu().numpy()
 
-# plot
-show_bg = args.show_bg
+    # plot
 
-if show_bg:
-    colors = ['r', 'g', 'b']
-    markers = ['o', 's', '^']
-    ids = [id0, id1, id2]
-else:
-    colors = ['g', 'b']
-    markers = ['s', '^']
-    ids = [id1, id2]
+    low_dim_feat = (low_dim_feat - np.min(low_dim_feat))
+    low_dim_feat /= np.max(low_dim_feat)
+    feat_map = low_dim_feat.reshape((img_size, img_size, -1))
 
-ax = plt.axes(projection='3d')
-for index, color, marker in zip(ids, colors, markers):
-    ax.scatter3D(low_dim_feat[index, 0], low_dim_feat[index, 1], 
-        low_dim_feat[index, 2], c=color, marker=marker)
-    ax.grid()
-
-plt.show()
+    plt.imsave(os.path.join('test_features', 'feat_{:03d}.jpg'.format(i)), feat_map)
+    
+    # plt.imshow(feat_map)
+    # plt.show()
