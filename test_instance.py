@@ -1,6 +1,6 @@
 import os
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ["CUDA_VISIBLE_DEVICES"]='8'
+os.environ["CUDA_VISIBLE_DEVICES"]='5,6'
 from model_instance import *
 from load_blender import *
 from run_nerf_helpers import *
@@ -29,10 +29,13 @@ args = parser.parse_args()
 N_train = depth_maps.shape[0]
 
 images, poses, render_poses, hwf, i_split = load_blender_data(
-            args.datadir, args.half_res, args.testskip)
+            args.datadir, args.half_res, args.testskip, size = 256)
 
 
-model = Encoder_Decoder_nerf(hwf, vgg=True, separate_decoder=False)
+# images, poses, render_poses, hwf = load_new_data(
+#             args.datadir, args.half_res, args.testskip, size = 256)
+
+model = Encoder_Decoder_nerf(hwf, vgg=True, separate_decoder=False, position_emb=False)
 
 
 start_iter = 0
@@ -41,7 +44,7 @@ start_iter = 0
 
 train_iters = 10000000
 
-N_print=100
+N_print=10
 N_save = 500
 N_imgs = 100
 N_img = 500
@@ -51,8 +54,9 @@ images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_map
 
 print('Start training')
 for i in range(start_iter, train_iters):
-    t = np.random.randint(0, 20, 1)
-    t = [0, 3, 25, 39]
+    t = np.random.randint(0, 20, 4)
+    # t = [0, 3, 25, 39]
+    # t = [0, 1, 2, 3]
 
     input_images, input_depths, input_poses = images[t], depth_maps[t], poses[t]
     loss = model.update_grad(input_images, input_depths, input_poses, i)
@@ -67,23 +71,30 @@ for i in range(start_iter, train_iters):
 
 
     if i % N_img == 0: 
-        val = np.random.randint(0, 20, )
-        val = [0, 3, 25, 39]
+        val = np.random.randint(0, 20, 4)
+        # val = [0, 3, 25, 39]
+        # val = [0, 1, 2, 3]
         check = np.random.randint(0, 4)
-        check = 0
+        # check = 0
         val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
         with torch.no_grad():
-            rgb, masked_rgb_slots, unmasked_rgb_slots = model.forward(val_images, val_depths, val_poses, isTrain=False)
+            rgb, masked_rgb_slots, unmasked_rgb_slots, attn = model.forward(val_images, val_depths, val_poses, isTrain=False)
             rgb = rgb.cpu().numpy()
             for s in range(len(masked_rgb_slots)):
                 masked_rgb_slots[s] = masked_rgb_slots[s].cpu().numpy()
                 unmasked_rgb_slots[s] = unmasked_rgb_slots[s].cpu().numpy()
             val_images = val_images.cpu().numpy()
+            attn = attn.permute([3,0,1,2])
+            attn = attn[..., None]
+            attn = attn.expand([-1,-1,-1,-1, 3])
+            attn = attn.cpu().numpy()
+            # print(attn.shape)
             print('Saving images')
             imageio.imwrite(os.path.join(img_dir, 'val_{:06d}.jpg'.format(i)), to8b(rgb[check]))
             for j in range(len(masked_rgb_slots)):
                 imageio.imwrite(os.path.join(img_dir, 'val_{:06d}_masked_slot{:01d}.jpg'.format(i,j)), to8b(masked_rgb_slots[j][check]))
                 imageio.imwrite(os.path.join(img_dir, 'val_{:06d}_unmasked_slot{:01d}.jpg'.format(i,j)), to8b(unmasked_rgb_slots[j][check]))
-            print('Done')  
+                imageio.imwrite(os.path.join(img_dir, 'val_{:06d}_attn_map{:01d}.jpg'.format(i,j)), to8b(attn[j][check]))
+            print('Done') 
 
         # imageio.imwrite(os.path.join('./imgs_1/gt_{:06d}.jpg'.format(i)), to8b(val_images[0]))

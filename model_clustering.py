@@ -44,12 +44,12 @@ class Encoder_VGG(nn.Module):
         if self.position_emb:
             self.input_c = self.input_c + position_emb_dim
 
-    def forward(self, x, depth, c2ws, is_selection=False):
+    def forward(self, x, depth, c2ws):
         """
         input:
             x: input image, BxHxWx3
         output:
-            feature_map: BxCxHxW
+            feature_map: BxHxWxC
         """
         x = x.permute([0,3,1,2])
         x = self.vgg_preprocess(x)
@@ -62,11 +62,9 @@ class Encoder_VGG(nn.Module):
             position = get_position(rays_o, rays_d, depth)
             x = torch.cat([x, position], dim=-1)
 
-        x = x.permute([0,3,1,2])
-
         return x
 
-class SlotAttention_without_refine(nn.Module):
+class SlotAttention_clustering(nn.Module):
 
     def __init__(self, device, num_slots=3, in_dim=64+3, slot_dim=64, mlp_hidden_size=128, epsilon=1e-8):
         super().__init__()
@@ -83,38 +81,59 @@ class SlotAttention_without_refine(nn.Module):
         self.to_v = nn.Linear(in_dim, slot_dim, bias=False)
         
 
-        self.slots = nn.ParameterList()
+        self.slots = torch.randn(slot_dim, num_slots)   # CxK
+        self.slots = self._l2norm(self.slots, dim=0)
 
-        for i in range(num_slots):
-            self.slots.append(nn.Parameter(torch.randn(1, slot_dim)))
+        self.grad_slots = nn.Parameter(torch.randn(num_slots, slot_dim))
 
+
+        self.stage_num = 3
 
 
     def forward(self, x):
-        slots = []
-        for i in range(self.num_slots):
-            slots.append(self.slots[i].clone())
-            slots[i] = slots[i].to(self.device)
-
+        """
+        input:
+            x: input image, NxC
+        """
+        slots = self.slots.to(self.device)
 
         x = self.norm_inputs(x)
 
-        # k_input = self.to_k(x)
+        k_input = self.to_k(x)
 
 
-        attn_logits = []
-        for i in range(self.num_slots):
-                    
-            cur_attn = torch.matmul(x, slots[i].T)
-            attn_logits.append(cur_attn)
 
-        attn_logits = torch.cat(attn_logits, dim=-1)
+
+        with torch.no_grad():
+            for i in range(self.stage_num):
+                z = torch.matmul(k_input, slots)      # NxK
+                z = F.softmax(z, dim=-1)                 # NxK
+                z_ = z / (1e-6 + z.sum(dim=1, keepdim=True))
+                slots = torch.matmul(k_input.T, z_)       # CxK
+                slots = self._l2norm(slots, dim=0)
+
+
+
+        attn_logits = torch.matmul(k_input, slots)
         attn = attn_logits.softmax(dim=-1)
 
-        slots = torch.cat(slots, dim=0)
+
+        # self.slots = slots.detach().clone()
+
+        return self.grad_slots, attn, k_input
 
 
-        return slots, attn
+    def _l2norm(self, inp, dim):
+        '''Normlize the inp tensor with l2-norm.
+        Returns a tensor where each sub-tensor of input along the given dim is 
+        normalized such that the 2-norm of the sub-tensor is equal to 1.
+        Arguments:
+            inp (tensor): The input tensor.
+            dim (int): The dimension to slice over to get the ssub-tensors.
+        Returns:
+            (tensor) The normalized tensor.
+        '''
+        return inp / (1e-6 + inp.norm(dim=dim, keepdim=True))
 
 class Decoder_NeRF_instanceSlot(nn.Module):
     def __init__(self, device, position_emb_dim=5, slot_input_dim=64, mlp_hidden_size=64):
@@ -213,7 +232,7 @@ class Decoder_NeRF_instanceSlot(nn.Module):
         return raws, masked_raws, unmasked_raws, masks 
 
 
-class Encoder_Decoder_nerf():
+class Encoder_Decoder_Clustering():
     def __init__(self, cam_param, num_slots = 3, num_iterations = 2, isTrain=True, lr=5e-4, vgg=False, separate_decoder=True, position_emb=True):
 
 
@@ -239,7 +258,7 @@ class Encoder_Decoder_nerf():
 
 
 
-        self.slot_attention = SlotAttention_without_refine(
+        self.slot_attention = SlotAttention_clustering(
             self.device,
             in_dim = in_dim,
             slot_dim = in_dim)
@@ -278,12 +297,11 @@ class Encoder_Decoder_nerf():
         x = self.encoder(images, depth_maps, c2ws) # (B,H,W,C)
 
         
-        x = x.permute([0,2,3,1])
 
         x = torch.reshape(x, [-1, x.shape[-1]])
 
 
-        slots, attn = self.slot_attention(x) # (N_slots, slot_size)
+        slots, attn, features = self.slot_attention(x) # (N_slots, slot_size)
 
         attn = attn.reshape([B, H, W, self.num_slots])
 
@@ -356,6 +374,8 @@ class Encoder_Decoder_nerf():
             loss_masked_img = loss_masked_img.expand([3,-1,-1,-1])
             loss_masked_img = loss_masked_img * loss_attn
             
+
+
 
 
             self.loss = L2_loss(rgb, loss_img) + L2_loss(slot_masked_rgb, loss_masked_img)
