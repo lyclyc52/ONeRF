@@ -89,15 +89,10 @@ def load_blender_data(basedir, half_res=False, testskip=1, size=-1):
         W = W * size//800
         focal = focal * size/800.
     elif half_res:
-        imgs = tf.compat.v1.image.resize_area(imgs, [128, 128]).numpy()
-        H = H * 128//800
-        W = W * 128//800
-        focal = focal * 128/800.
-    # elif half_res:
-    #     imgs = tf.compat.v1.image.resize_area(imgs, [400, 400]).numpy()
-    #     H = H//2
-    #     W = W//2
-    #     focal = focal/2.
+        imgs = tf.compat.v1.image.resize_area(imgs, [400, 400]).numpy()
+        H = H//2
+        W = W//2
+        focal = focal/2.
 
 
         
@@ -154,6 +149,8 @@ def load_new_data(basedir, half_res=False, testskip=1, size=-1):
         W = W//2
         focal = focal/2.
 
+
+    print(H, W)
 
         
     return imgs, poses, render_poses, [H, W, focal]

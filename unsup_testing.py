@@ -56,7 +56,8 @@ depth_maps = tf.compat.v1.image.resize_area(depth_maps, [256, 256]).numpy()
 depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
 
 weights_dir = './results/testing_3/weights'
-img_dir = './results/testing_5/imgs'
+img_dir = './results/testing_7/imgs'
+basedir = './results/testing_9/imgs'
 
 
 os.makedirs(weights_dir, exist_ok=True)
@@ -68,12 +69,14 @@ args = parser.parse_args()
 
 N_train = depth_maps.shape[0]
 
-images, poses, render_poses, hwf, i_split = load_blender_data(
-            args.datadir, args.half_res, args.testskip, size = 256)
-num_slot = 3
-N_imgs=100
-images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
-images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
+
+num_slot = 20
+
+# images, poses, render_poses, hwf, i_split = load_blender_data(
+#             args.datadir, args.half_res, args.testskip, size = 256)
+# N_imgs=100
+# images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
+# images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
 loss_fn = torch.nn.CrossEntropyLoss()
 
 
@@ -87,7 +90,7 @@ device = torch.device("cuda:0" )
 model = MyNet( 3, num_slot=num_slot )
 model.to(device)
 
-B,H,W = 4, images.shape[1], images.shape[2]
+B,H,W = 4, 128, 128# 4, images.shape[1], images.shape[2]
 
 optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
 label_colours = np.random.randint(255,size=(num_slot,3))
@@ -97,18 +100,32 @@ HPz_target = torch.zeros(B, H, W-1, num_slot)
 HPy_target = HPy_target.to(device)
 HPz_target = HPz_target.to(device)
 
-for i in range(500):
+
+imgs = []
+for i in range(4):
+    fname = os.path.join(basedir, 'masked_{:06d}_slot{:01d}.jpg'.format(i,1))
+    imgs.append(imageio.imread(fname))
+
+
+imgs = (np.array(imgs) / 255.).astype(np.float32) # keep all 4 channels (RGBA)
+
+imgs= imgs[...,:3]
+imgs = torch.from_numpy(imgs)
+imgs = imgs.to(device)
+
+for i in range(1000):
     optimizer.zero_grad()
     
 
-    val = np.random.randint(0, 20, )
-    val = [0, 3, 25, 39]
-    val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
-    val_images, val_depths, val_poses = val_images.to(device), val_depths.to(device), val_poses.to(device)
+    # val = np.random.randint(0, 20, )
+    # val = [0, 3, 25, 39]
+    # val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
+    # val_images, val_depths, val_poses = val_images.to(device), val_depths.to(device), val_poses.to(device)
     # f = f_extr(val_images, val_depths, val_poses)
     # f = f.permute([0,3,1,2])
 
-    f = val_images.permute([0,3,1,2])
+    # f = val_images.permute([0,3,1,2])
+    f = imgs.permute([0,3,1,2])
     output = model( f )
 
     output = output.permute([0,2,3,1]).reshape( [-1, num_slot] )
@@ -142,3 +159,7 @@ for i in range(500):
         im_target_rgb = im_target_rgb.reshape( [B,H,W,3] ).astype( np.uint8 )
         for b in range(B):
             imageio.imwrite(os.path.join(img_dir, 'val_{:06d}__slot{:01d}.jpg'.format(i,b)), im_target_rgb[b])
+
+
+
+print(np.unique(im_target).shape)

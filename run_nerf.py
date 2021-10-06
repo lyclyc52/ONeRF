@@ -800,8 +800,7 @@ def train():
                 select_inds = np.random.choice(
                     coords.shape[0], size=[N_rand], replace=False)
                 select_inds = tf.gather_nd(coords, select_inds[:, tf.newaxis])
-                print(select_inds.shape)
-                exit()
+
                 rays_o = tf.gather_nd(rays_o, select_inds)
                 rays_d = tf.gather_nd(rays_d, select_inds)
                 batch_rays = tf.stack([rays_o, rays_d], 0)
@@ -887,48 +886,49 @@ def train():
                 if args.N_importance > 0:
                     tf.contrib.summary.scalar('psnr0', psnr0)
 
-            if i % args.i_img == 0:
+        if i % 1 == 0: #args.i_img == 0:
 
-                # Log a rendered validation view to Tensorboard
-                img_i = np.random.choice(i_val)
-                target = images[img_i]
-                pose = poses[img_i, :3, :4]
+            # Log a rendered validation view to Tensorboard
+            img_i = np.random.choice(i_val)
+            target = images[img_i]
+            pose = poses[img_i, :3, :4]
 
-                rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, c2w=pose,
-                                                **render_kwargs_test)
+            rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, c2w=pose,
+                                            **render_kwargs_test)
 
-                psnr = mse2psnr(img2mse(rgb, target))
-                
-                # Save out the validation image for Tensorboard-free monitoring
-                testimgdir = os.path.join(basedir, expname, 'tboard_val_imgs')
-                if i==0:
-                    os.makedirs(testimgdir, exist_ok=True)
-                imageio.imwrite(os.path.join(testimgdir, '{:06d}.png'.format(i)), to8b(rgb))
+            psnr = mse2psnr(img2mse(rgb, target))
+            
+            # Save out the validation image for Tensorboard-free monitoring
+            testimgdir = os.path.join(basedir, expname, 'tboard_val_imgs')
+            if i==0:
+                os.makedirs(testimgdir, exist_ok=True)
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}.png'.format(i)), to8b(rgb))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_depth.png'.format(i)), to8b(disp))
+
+            with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
+
+                tf.contrib.summary.image('rgb', to8b(rgb)[tf.newaxis])
+                tf.contrib.summary.image(
+                    'disp', disp[tf.newaxis, ..., tf.newaxis])
+                tf.contrib.summary.image(
+                    'acc', acc[tf.newaxis, ..., tf.newaxis])
+
+                tf.contrib.summary.scalar('psnr_holdout', psnr)
+                tf.contrib.summary.image('rgb_holdout', target[tf.newaxis])
+
+            if args.N_importance > 0:
 
                 with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
-
-                    tf.contrib.summary.image('rgb', to8b(rgb)[tf.newaxis])
                     tf.contrib.summary.image(
-                        'disp', disp[tf.newaxis, ..., tf.newaxis])
+                        'rgb0', to8b(extras['rgb0'])[tf.newaxis])
                     tf.contrib.summary.image(
-                        'acc', acc[tf.newaxis, ..., tf.newaxis])
-
-                    tf.contrib.summary.scalar('psnr_holdout', psnr)
-                    tf.contrib.summary.image('rgb_holdout', target[tf.newaxis])
-
-                if args.N_importance > 0:
-
-                    with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
-                        tf.contrib.summary.image(
-                            'rgb0', to8b(extras['rgb0'])[tf.newaxis])
-                        tf.contrib.summary.image(
-                            'disp0', extras['disp0'][tf.newaxis, ..., tf.newaxis])
-                        tf.contrib.summary.image(
-                            'z_std', extras['z_std'][tf.newaxis, ..., tf.newaxis])
+                        'disp0', extras['disp0'][tf.newaxis, ..., tf.newaxis])
+                    tf.contrib.summary.image(
+                        'z_std', extras['z_std'][tf.newaxis, ..., tf.newaxis])
 
         global_step.assign_add(1)
 
 
 if __name__ == '__main__':
-    os.environ['CUDA_VISIBLE_DEVICES']='4,5'
+    os.environ['CUDA_VISIBLE_DEVICES']='8'
     train()
