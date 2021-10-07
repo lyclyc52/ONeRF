@@ -49,15 +49,51 @@ class MyNet(nn.Module):
         x = self.bn3(x)
         return x
 
-depth_file = 'data/nerf_synthetic/clevr_100_2objects/all_depths.npy'
-depth_maps = np.load(depth_file)
-depth_maps = depth_maps[..., None]
-depth_maps = tf.compat.v1.image.resize_area(depth_maps, [256, 256]).numpy()
-depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
+
+
+class SobelOperator(nn.Module):
+    def __init__(self, epsilon):
+        super().__init__()
+        self.epsilon = epsilon
+
+        x_kernel = np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]])/4
+        self.conv_x = nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv_x.weight.data = torch.tensor(x_kernel).unsqueeze(0).unsqueeze(0).float().cuda()
+        self.conv_x.weight.requires_grad = False
+
+        y_kernel = np.array([[1, 2, 1], [0, 0, 0], [-1, -2, -1]])/4
+        self.conv_y = nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv_y.weight.data = torch.tensor(y_kernel).unsqueeze(0).unsqueeze(0).float().cuda()
+        self.conv_y.weight.requires_grad = False
+
+    def forward(self, x):
+
+        b, c, h, w = x.shape
+        if c > 1:
+            x = x.view(b*c, 1, h, w)
+
+        x = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
+
+        grad_x = self.conv_x(x)
+        grad_y = self.conv_y(x)
+        
+        x = torch.sqrt(grad_x ** 2 + grad_y ** 2 + self.epsilon)
+
+        x = x.view(b, c, h, w)
+
+        return x
+
+
+
+# depth_file = 'data/nerf_synthetic/clevr_100_2objects/all_depths.npy'
+# depth_maps = np.load(depth_file)
+# depth_maps = depth_maps[..., None]
+# depth_maps = tf.compat.v1.image.resize_area(depth_maps, [256, 256]).numpy()
+# depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
 
 weights_dir = './results/testing_3/weights'
-img_dir = './results/testing_7/imgs'
-basedir = './results/testing_9/imgs'
+img_dir = './results/testing_11/segmentation'
+basedir = './results/testing_11/mask_refine'
 
 
 os.makedirs(weights_dir, exist_ok=True)
@@ -67,10 +103,9 @@ os.makedirs(img_dir, exist_ok=True)
 parser = config_parser()
 args = parser.parse_args()
 
-N_train = depth_maps.shape[0]
 
 
-num_slot = 20
+num_slot = 7
 
 # images, poses, render_poses, hwf, i_split = load_blender_data(
 #             args.datadir, args.half_res, args.testskip, size = 256)
@@ -90,20 +125,12 @@ device = torch.device("cuda:0" )
 model = MyNet( 3, num_slot=num_slot )
 model.to(device)
 
-B,H,W = 4, 128, 128# 4, images.shape[1], images.shape[2]
 
-optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
-label_colours = np.random.randint(255,size=(num_slot,3))
-
-HPy_target = torch.zeros(B, H-1, W, num_slot)
-HPz_target = torch.zeros(B, H, W-1, num_slot)
-HPy_target = HPy_target.to(device)
-HPz_target = HPz_target.to(device)
 
 
 imgs = []
-for i in range(4):
-    fname = os.path.join(basedir, 'masked_{:06d}_slot{:01d}.jpg'.format(i,1))
+for i in range(16):
+    fname = os.path.join(basedir, 'input{:01d}.png'.format(i,1))
     imgs.append(imageio.imread(fname))
 
 
@@ -112,6 +139,18 @@ imgs = (np.array(imgs) / 255.).astype(np.float32) # keep all 4 channels (RGBA)
 imgs= imgs[...,:3]
 imgs = torch.from_numpy(imgs)
 imgs = imgs.to(device)
+
+
+
+B,H,W = imgs.shape[0], imgs.shape[1], imgs.shape[2]
+
+optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+label_colours = np.random.randint(255,size=(num_slot,3))
+
+HPy_target = torch.zeros(B, H-1, W, num_slot)
+HPz_target = torch.zeros(B, H, W-1, num_slot)
+HPy_target = HPy_target.to(device)
+HPz_target = HPz_target.to(device)
 
 for i in range(1000):
     optimizer.zero_grad()
@@ -147,19 +186,21 @@ for i in range(1000):
 
     loss = loss_fn(output, target) + (lhpy + lhpz)
 
-    print(i)
-    print(loss)
 
     
     loss.backward()
     optimizer.step()
     if i % 50 ==0:
+        print(i)
+        print(loss)
+
         im_target = target.data.cpu().numpy()
         im_target_rgb = np.array([label_colours[ c ] for c in im_target])
         im_target_rgb = im_target_rgb.reshape( [B,H,W,3] ).astype( np.uint8 )
         for b in range(B):
             imageio.imwrite(os.path.join(img_dir, 'val_{:06d}__slot{:01d}.jpg'.format(i,b)), im_target_rgb[b])
 
+        
+        print(np.unique(im_target).shape)
 
 
-print(np.unique(im_target).shape)

@@ -166,138 +166,138 @@ def _l2norm(inp, dim):
 
 #         return x, slots
 
-weights_dir = './results/testing_3/weights'
-img_dir = './results/testing_9/imgs'
-
-input_size = 128
-
-os.makedirs(weights_dir, exist_ok=True)
-os.makedirs(img_dir, exist_ok=True)
 
 
 
-datadir = 'data/nerf_synthetic/clevr_depth'
+def main():
+    weights_dir = './results/testing_3/weights'
+    img_dir = './results/testing_11/imgs'
 
+    input_size = 128
 
-images, poses, depth_maps, render_poses, hwf, i_split = load_data(
-            datadir, True, 1, size = input_size)
-
-
-N_imgs=49
-images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
-images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
-loss_fn = torch.nn.CrossEntropyLoss()
-
-
-loss_hpy = torch.nn.L1Loss(size_average = True)
-loss_hpz = torch.nn.L1Loss(size_average = True)
-
-device = torch.device("cuda:0" )
-f_extractor = Encoder_VGG(hwf, device=device)
-f_extractor.to(device)
-
-C = 259
-num_slots = 2
-slots = torch.randn(num_slots, C-3)
-position = torch.randn(num_slots, 3)
-slots = slots.to(device)
-position = position.to(device)
-
-
-for iter in range(1):
-    # val = [0, 3, 25, 39]
-    val = [t for t in range(iter*2,iter*2+4)]
-    val = [0, 2, 22, 39, 41]
-    print(val)
-    val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
-    val_images, val_depths, val_poses = val_images.to(device), val_depths.to(device), val_poses.to(device)
-    print(val_images.shape)
-    print(val_depths.shape)
-    f = f_extractor(val_images, val_depths, val_poses)
-    B, H, W, C = f.shape
-
-
-    f = f.reshape([-1, C])
-
-    f_p = f[...,C-3:]
-    f = f[...,:C-3]
-
-
-    # normal_f = nn.LayerNorm(C-3)
-    # normal_f.to(device)
-    # f = normal_f(f)
+    os.makedirs(weights_dir, exist_ok=True)
+    os.makedirs(img_dir, exist_ok=True)
 
 
 
-    w = 5.
-    # slots = slots.T
-    # position = position.T
-
-    # with torch.no_grad():
-    #     for i in range(20):
-    #         z = torch.matmul(f, slots)      # NxK
-    #         z_p = torch.matmul(f_p, position) 
-    #         z = z + w * z_p
-    #         z = F.softmax(z, dim=-1)                 # NxK
-    #         z_ = z / (1e-6 + z.sum(dim=1, keepdim=True))
-    #         slots = torch.matmul(f.T, z_)       # CxK
-    #         slots = _l2norm(slots, dim=0) 
-    #         position = torch.matmul(f_p.T, z_)
-    #         position = _l2norm(position, dim=0) 
+    datadir = 'data/nerf_synthetic/clevr_depth'
 
 
-    # attn_logits = torch.matmul(f, slots)
-    # attn = attn_logits.softmax(dim=-1)
-    # print(attn.shape)
-    # attn = attn.reshape([B,H,W,num_slots])
-    # attn = attn.permute([0,3,1,2])
+    images, poses, depth_maps, render_poses, hwf, i_split = load_data(
+                datadir, True, 1, size = input_size)
+
+
+    N_imgs=49
+    images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
+    images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
+
+
+    device = torch.device("cuda:0" )
+    f_extractor = Encoder_VGG(hwf, device=device)
+    f_extractor.to(device)
+
+    C = 259
+    num_slots = 2
+    slots = torch.randn(num_slots, C-3)
+    position = torch.randn(num_slots, 3)
+    slots = slots.to(device)
+    position = position.to(device)
+
+    # image = [0, 2, 3, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 45, 46, 48]
+    for iter in range(1):
+        # val = [0, 3, 25, 39]
+        # val = [t for t in range(iter*2,iter*2+4)]
+        val = [0, 2, 3, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 45, 46, 48]
+        print(val)
+        val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
+        val_images, val_depths, val_poses = val_images.to(device), val_depths.to(device), val_poses.to(device)
+        print(val_images.shape)
+        print(val_depths.shape)
+        f = f_extractor(val_images, val_depths, val_poses)
+        B, H, W, C = f.shape
+
+
+        f = f.reshape([-1, C])
+
+        f_p = f[...,C-3:]
+        f = f[...,:C-3]
+
+
+        # normal_f = nn.LayerNorm(C-3)
+        # normal_f.to(device)
+        # f = normal_f(f)
+
+
+
+        w = 3.
+        # slots = slots.T
+        # position = position.T
+
+        # with torch.no_grad():
+        #     for i in range(20):
+        #         z = torch.matmul(f, slots)      # NxK
+        #         z_p = torch.matmul(f_p, position) 
+        #         z = z + w * z_p
+        #         z = F.softmax(z, dim=-1)                 # NxK
+        #         z_ = z / (1e-6 + z.sum(dim=1, keepdim=True))
+        #         slots = torch.matmul(f.T, z_)       # CxK
+        #         slots = _l2norm(slots, dim=0) 
+        #         position = torch.matmul(f_p.T, z_)
+        #         position = _l2norm(position, dim=0) 
+
+
+        # attn_logits = torch.matmul(f, slots)
+        # attn = attn_logits.softmax(dim=-1)
+        # print(attn.shape)
+        # attn = attn.reshape([B,H,W,num_slots])
+        # attn = attn.permute([0,3,1,2])
 
 
 
 
 
-    for i in range(50):
-        z=[]
-        z_p=[]
-        for j in range(num_slots):
-            z.append(torch.sum((f - slots[j])**2, dim=-1))    # N
-            if j!= num_slots-1:
-                z_p.append(torch.sum((f_p - position[j])**2, dim=-1)) # N
-            # z_p.append(torch.sum((f_p - position[j])**2, dim=-1))
+        for i in range(50):
+            z=[]
+            z_p=[]
+            for j in range(num_slots):
+                z.append(torch.sum((f - slots[j])**2, dim=-1))    # N
+                if j!= num_slots-1:
+                    z_p.append(torch.sum((f_p - position[j])**2, dim=-1)) # N
+                # z_p.append(torch.sum((f_p - position[j])**2, dim=-1))
 
 
-        z = torch.stack(z)
-        z_p = torch.stack(z_p)
-        z = z.T
-        z_p = z_p.T 
+            z = torch.stack(z)
+            z_p = torch.stack(z_p)
+            z = z.T
+            z_p = z_p.T 
 
 
 
-        bg_p = torch.zeros([z.shape[0],1])
-        bg_p = bg_p.to(device)
-        z_p = torch.cat([z_p,bg_p],dim=1)
+            bg_p = torch.zeros([z.shape[0],1])
+            bg_p = bg_p.to(device)
+            z_p = torch.cat([z_p,bg_p],dim=1)
 
-        score = z+w*z_p
-        ignore, index = torch.min(score,1)
+            score = z+w*z_p
+            ignore, index = torch.min(score,1)
+            
+            for j in range(num_slots):
+                slots[j] = torch.mean(f[index==j], dim=0)
+                if j!= num_slots-1:
+                    position[j]  = torch.mean(f_p[index==j], dim=0)
+
+                # position[j] = torch.mean(f_p[index==j], dim=0)
+
+
+        attn_logits = score
+        attn = attn_logits.softmax(dim=-1)
         
-        for j in range(num_slots):
-            slots[j] = torch.mean(f[index==j], dim=0)
-            if j!= num_slots-1:
-                position[j]  = torch.mean(f_p[index==j], dim=0)
+        attn = attn.reshape([B,H,W,num_slots])
+        attn = attn.permute([0,3,1,2])
 
-            # position[j] = torch.mean(f_p[index==j], dim=0)
-
-
-    attn_logits = score
-    attn = attn_logits.softmax(dim=-1)
-    
-    attn = attn.reshape([B,H,W,num_slots])
-    attn = attn.permute([0,3,1,2])
-
-    attn = attn.cpu().numpy()
-    val_images = val_images.cpu().numpy()
-    # print(iter)
-    for b in range(B):
-        for s in range(num_slots):
-            imageio.imwrite(os.path.join(img_dir, 'val_{:06d}_slot{:01d}.jpg'.format(b,s)), to8b(attn[b][s]))
-            imageio.imwrite(os.path.join(img_dir, 'masked_{:06d}_slot{:01d}.jpg'.format(b,s)), to8b(attn[b][s][...,None]*val_images[b]))
+        attn = attn.cpu().numpy()
+        val_images = val_images.cpu().numpy()
+        # print(iter)
+        for b in range(B):
+            for s in range(num_slots):
+                imageio.imwrite(os.path.join(img_dir, 'val_{:06d}_slot{:01d}.jpg'.format(b,s)), to8b(attn[b][s]))
+                imageio.imwrite(os.path.join(img_dir, 'masked_{:06d}_slot{:01d}.jpg'.format(b,s)), to8b(attn[b][s][...,None]*val_images[b]))

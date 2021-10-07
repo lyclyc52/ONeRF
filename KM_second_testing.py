@@ -80,7 +80,7 @@ def load_data(basedir, half_res=False, testskip=1, size=-1):
 weights_dir = './results/testing_3/weights'
 img_dir = './results/testing_10/imgs'
 
-input_size = 128
+input_size = 400
 
 os.makedirs(weights_dir, exist_ok=True)
 os.makedirs(img_dir, exist_ok=True)
@@ -127,6 +127,9 @@ for i in range(5):
 
 masks = ( np.array(masks) / 255.).astype(np.float32)
 
+masks = tf.compat.v1.image.resize_area(masks[...,None], [input_size, input_size]).numpy()
+
+masks = masks[...,0]
 masks = torch.from_numpy(masks)
 masks = masks.to(device)
 
@@ -195,23 +198,23 @@ with torch.no_grad():
 
 
         f_p = f[...,C-3:]
-        f = f[...,:C-3]
+        # f = f[...,:C-3]
 
-        normal_f = nn.LayerNorm(C-3)
-        normal_f.to(device)
-        f = normal_f(f)
+        # normal_f = nn.LayerNorm(C-3)
+        # normal_f.to(device)
+        # f = normal_f(f)
 
-        for i in range(1):
+        for i in range(20):
             z=[]
             z_p=[]
             for j in range(num_slots):
-                z.append(torch.sum((f - slots[j])**2, dim=-1))    # N
+                # z.append(torch.sum((f - slots[j])**2, dim=-1))    # N
                 # if j!= num_slots-1:
                 #     z_p.append(torch.sum((f_p - position[:, j])**2, dim=-1))
                 z_p.append(torch.sum((f_p - position[j])**2, dim=-1)) # N
-            z = torch.stack(z)
+            # z = torch.stack(z)
             z_p = torch.stack(z_p)
-            z = z.T
+            # z = z.T
             z_p = z_p.T 
 
 
@@ -222,11 +225,11 @@ with torch.no_grad():
             # bg_p = bg_p.to(device)
             # z_p = torch.cat([z_p,bg_p],dim=1)
 
-            score = z+w*z_p
+            score = w*z_p
             ignore, index = torch.min(score,1)
             
             for j in range(num_slots):
-                slots[j] = torch.mean(f[index==j], dim=0)
+                # slots[j] = torch.mean(f[index==j], dim=0)
                 # if j!= num_slots-1:
                 #     position[:, j]  = torch.mean(f_p[index==j].T, dim=-1)
                 position[j] = torch.mean(f_p[index==j], dim=0)
@@ -265,5 +268,5 @@ with torch.no_grad():
                 
                 imageio.imwrite(os.path.join(img_dir, 'val_{:06d}_slot{:01d}.jpg'.format(b,s)), to8b(attn[b][s]))
                 imageio.imwrite(os.path.join(img_dir, 'masked_{:06d}_slot{:01d}.jpg'.format(b,s)), to8b(attn[b][s][...,None]*val_images[b]))
-            # imageio.imwrite(os.path.join(img_dir, 'gt_{:06d}.jpg'.format(b)), to8b(val_images[b]))
-            # imageio.imwrite(os.path.join(img_dir, 'mask_{:06d}.jpg'.format(b)), to8b(masks[b,...,None]))
+            imageio.imwrite(os.path.join(img_dir, 'gt_{:06d}.jpg'.format(b)), to8b(val_images[b]))
+            imageio.imwrite(os.path.join(img_dir, 'mask_{:06d}.jpg'.format(b)), to8b(masks[b,...,None]*val_images[b]))
