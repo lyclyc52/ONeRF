@@ -16,3 +16,5 @@ logs/*
 *.tmp
 *test_*
 *testing_*
+masks_2d/
+*.temp
