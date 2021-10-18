@@ -484,6 +484,194 @@ class SlotAttention_Three(nn.Module):
 
         return slots, attn.T
 
+class SlotAttention_Instance(nn.Module):
+    def __init__(self, device, num_iterations=2, num_slots=3, in_dim=64, slot_dim=64, mlp_hidden_size=128, epsilon=1e-8):
+        super().__init__()
+
+        self.device = device
+        self.num_iterations = num_iterations
+        self.num_slots = num_slots
+        self.in_dim =in_dim
+        self.slot_dim = slot_dim
+        self.mlp_hidden_size = mlp_hidden_size
+        self.epsilon = epsilon
+
+        self.norm_inputs = nn.LayerNorm(in_dim)
+        self.to_k = nn.Linear(in_dim, slot_dim, bias=False)
+        self.to_v = nn.Linear(in_dim, slot_dim, bias=False)
+        
+
+        self.slots_mu = nn.ParameterList()
+        # self.slots_logsigma = nn.ParameterList()
+        self.to_q = nn.ModuleList()
+        self.gru = nn.ModuleList()
+        self.mlp = nn.ModuleList()
+        for i in range(num_slots):
+            self.slots_mu.append(nn.Parameter(torch.randn(1, slot_dim)))
+            # self.slots_logsigma.append(nn.Parameter(torch.zeros(1, slot_dim)))
+            # init.xavier_uniform_(self.slots_logsigma[i])
+            self.to_q.append(nn.Sequential(nn.LayerNorm(slot_dim), nn.Linear(slot_dim, slot_dim, bias=False)))
+            self.gru.append(nn.GRUCell(slot_dim, slot_dim))
+            self.mlp.append(nn.Sequential(
+                nn.LayerNorm(slot_dim),
+                nn.Linear(slot_dim, mlp_hidden_size),
+                nn.ReLU(inplace=True),
+                nn.Linear(mlp_hidden_size, slot_dim)
+            ))
+
+
+
+
+    def forward(self, x):
+        """
+        input:
+            feat: visual feature with position information, BxNxC
+        output: slots: KxC, attn: KxN
+        """
+
+        slots = []
+        for i in range(self.num_slots):
+            mu = self.slots_mu[i].expand(1, -1)
+            slots.append(mu)
+
+
+        x = self.norm_inputs(x)
+
+        k_input = self.to_k(x)
+        v_input = self.to_v(x)
+
+        for _ in range(self.num_iterations):
+            slot_prev = slots
+
+            attn_logits = []
+            for i in range(self.num_slots):
+
+                q_slots = self.to_q[i](slots[i])
+                q_slots = q_slots*self.slot_dim ** -0.5
+
+                cur_attn = torch.matmul(k_input, q_slots.T)
+                attn_logits.append(cur_attn)
+
+            attn_logits = torch.cat(attn_logits, dim=-1)
+            attn = attn_logits.softmax(dim=-1)
+
+
+            new_slots = []
+            for i in range(self.num_slots):
+                attn_slot = attn[...,i:i+1]
+                weight = attn_slot + self.epsilon
+                weight = weight / torch.sum(weight, dim=-2, keepdims=True)
+                updates = torch.matmul(weight.T, v_input)
+
+                new_slot = self.gru[i](
+                    updates.reshape(-1, self.slot_dim),
+                    slot_prev[i].reshape(-1, self.slot_dim)
+                )
+
+                new_slot = new_slot + self.mlp[i](new_slot)
+                new_slots.append(new_slot)
+            slots = new_slots
+
+
+        
+
+        slots = torch.cat(slots, dim=0)
+
+        return slots, attn.T
+
+
+class SlotAttention_Update(nn.Module):
+    def __init__(self, device, num_iterations=3, num_slots=3, in_dim=64, slot_dim=64, mlp_hidden_size=128, epsilon=1e-8):
+        super().__init__()
+
+        self.device = device
+        self.num_iterations = num_iterations
+        self.num_slots = num_slots
+        self.in_dim =in_dim
+        self.slot_dim = slot_dim
+        self.mlp_hidden_size = mlp_hidden_size
+        self.epsilon = epsilon
+
+        self.norm_inputs = nn.LayerNorm(in_dim)
+        self.to_k = nn.Linear(in_dim, slot_dim, bias=False)
+        self.to_v = nn.Linear(in_dim, slot_dim, bias=False)
+        
+
+        self.slots_mu = []
+        # self.slots_logsigma = nn.ParameterList()
+        self.to_q = nn.ModuleList()
+        self.gru = nn.ModuleList()
+        self.mlp = nn.ModuleList()
+        for i in range(num_slots):
+            self.slots_mu.append(torch.zeros(1, slot_dim))
+            self.to_q.append(nn.Sequential(nn.LayerNorm(slot_dim), nn.Linear(slot_dim, slot_dim, bias=False)))
+            self.gru.append(nn.GRUCell(slot_dim, slot_dim))
+            self.mlp.append(nn.Sequential(
+                nn.LayerNorm(slot_dim),
+                nn.Linear(slot_dim, mlp_hidden_size),
+                nn.ReLU(inplace=True),
+                nn.Linear(mlp_hidden_size, slot_dim)
+            ))
+
+
+
+
+    def forward(self, x):
+        """
+        input:
+            feat: visual feature with position information, BxNxC
+        output: slots: KxC, attn: KxN
+        """
+
+        slots = []
+        for i in range(self.num_slots):
+            mu = self.slots_mu[i].expand(1, -1)
+            mu = mu.to(self.device)
+            slots.append(mu)
+
+
+        x = self.norm_inputs(x)
+
+        k_input = self.to_k(x)
+        v_input = self.to_v(x)
+
+        for _ in range(self.num_iterations):
+            slot_prev = slots
+
+            attn_logits = []
+            for i in range(self.num_slots):
+                q_slots = self.to_q[i](slots[i])
+                q_slots = q_slots*self.slot_dim ** -0.5
+                cur_attn = torch.matmul(k_input, q_slots.T)
+                attn_logits.append(cur_attn)
+
+            attn_logits = torch.cat(attn_logits, dim=-1)
+            attn = attn_logits.softmax(dim=-1)
+
+
+            new_slots = []
+            for i in range(self.num_slots):
+                attn_slot = attn[...,i:i+1]
+                weight = attn_slot + self.epsilon
+                weight = weight / torch.sum(weight, dim=-2, keepdims=True)
+                updates = torch.matmul(weight.T, v_input)
+
+                new_slot = self.gru[i](
+                    updates.reshape(-1, self.slot_dim),
+                    slot_prev[i].reshape(-1, self.slot_dim)
+                )
+
+                new_slot = new_slot + self.mlp[i](new_slot)
+                new_slots.append(new_slot)
+            slots = new_slots
+
+
+        
+        self.slots_mu = [g.clone().detach() for g in slots]
+        slots = torch.cat(slots, dim=0)
+
+        return slots, attn.T
+
 
 class Decoder_nerf_ind(nn.Module):
     def __init__(self, device, position_emb_dim=5, input_dim=64, mlp_hidden_size=64):
@@ -716,6 +904,7 @@ class Encoder_Decoder_nerf():
 
         self.cam_param = cam_param
 
+
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         print(self.device)
 
@@ -729,7 +918,24 @@ class Encoder_Decoder_nerf():
             self.encoder = Encoder(cam_param, self.device)
             in_dim = 64
         self.encoder.to(self.device)
-        self.slot_attention = SlotAttention_Three(
+        # self.slot_attention = SlotAttention_Three(
+        #     self.device,
+        #     num_iterations=self.num_iterations,
+        #     num_slots=self.num_slots,
+        #     in_dim = in_dim,
+        #     slot_dim=64,
+        #     mlp_hidden_size=128)
+
+        # self.slot_attention = SlotAttention_Instance(
+        #     self.device,
+        #     num_iterations=self.num_iterations,
+        #     num_slots=self.num_slots,
+        #     in_dim = in_dim,
+        #     slot_dim=64,
+        #     mlp_hidden_size=128)
+
+
+        self.slot_attention = SlotAttention_Update(
             self.device,
             num_iterations=self.num_iterations,
             num_slots=self.num_slots,
@@ -794,7 +1000,9 @@ class Encoder_Decoder_nerf():
         if isTrain==True:
             pts, z_vals, rays_d, select_inds = sampling_points(self.cam_param, c2ws, is_selection=True)
         else:
-            pts, z_vals,rays_d = sampling_points(self.cam_param, c2ws)
+            check = np.random.randint(0,4)
+            pts, z_vals,rays_d = sampling_points(self.cam_param, c2ws[check:check+1])
+
 
 
         B,N,N_samples,_ = pts.shape
@@ -892,7 +1100,7 @@ class Encoder_Decoder_nerf():
         # points sampling
 
 
-        if isTrain==False:
+        else:
             slot_masked_rgb = []
             for s in range(self.num_slots):
                 slot_mask_raws = masked_raws[s]
@@ -912,9 +1120,7 @@ class Encoder_Decoder_nerf():
             for s in range(self.num_slots):
                 slot_unmasked_rgb[s] = torch.reshape(slot_unmasked_rgb[s], [B, H, W, 3])
         
-
-
-        return rgb, slot_masked_rgb, slot_unmasked_rgb
+            return rgb, slot_masked_rgb, slot_unmasked_rgb
 
     def backward(self, iter):
 
@@ -927,9 +1133,9 @@ class Encoder_Decoder_nerf():
         loss.backward()
         
 
-    def update_grad(self, images, depth_maps, c2ws, iter, img_id=None):
+    def update_grad(self, images, depth_maps, c2ws, iter):
 
-        self.forward(images, depth_maps, c2ws, img_id=img_id)
+        self.forward(images, depth_maps, c2ws)
 
 
         self.optimizer.zero_grad()

@@ -82,23 +82,79 @@ def load_blender_data(basedir, half_res=False, testskip=1, size=-1):
     
     render_poses = tf.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]],0)
     
+
     if size > 0:
         imgs = tf.compat.v1.image.resize_area(imgs, [size, size]).numpy()
         H = H * size//800
         W = W * size//800
         focal = focal * size/800.
     elif half_res:
-        imgs = tf.compat.v1.image.resize_area(imgs, [128, 128]).numpy()
-        H = H * 128//800
-        W = W * 128//800
-        focal = focal * 128/800.
-    # elif half_res:
-    #     imgs = tf.compat.v1.image.resize_area(imgs, [400, 400]).numpy()
-    #     H = H//2
-    #     W = W//2
-    #     focal = focal/2.
+        imgs = tf.compat.v1.image.resize_area(imgs, [400, 400]).numpy()
+        H = H//2
+        W = W//2
+        focal = focal/2.
+
 
         
     return imgs, poses, render_poses, [H, W, focal], i_split
+
+
+
+def load_new_data(basedir, half_res=False, testskip=1, size=-1):
+    splits = ['train', 'val', 'test']
+    metas = {}
+
+    with open(os.path.join(basedir, 'transforms.json'), 'r') as fp:
+        metas['train'] = json.load(fp)
+
+    all_imgs = []
+    all_poses = []
+    counts = [0]
+
+ 
+    imgs = []
+    poses = []
+    skip=1
+        
+    for frame in metas['train']['frames'][::skip]:
+        fname = os.path.join(basedir, frame['file_path'] + '.png')
+        imgs.append(imageio.imread(fname))
+        poses.append(np.array(frame['transform_matrix']))
+    imgs = (np.array(imgs) / 255.).astype(np.float32) # keep all 4 channels (RGBA)
+    poses = np.array(poses).astype(np.float32)
+    print(poses[0])
+    counts.append(counts[-1] + imgs.shape[0])
+    all_imgs.append(imgs)
+    all_poses.append(poses)
+    
+    
+    imgs = np.concatenate(all_imgs, 0)
+    poses = np.concatenate(all_poses, 0)
+    
+    H, W = imgs[0].shape[:2]
+
+    focal = 875.
+    
+    render_poses = tf.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]],0)
+    
+
+    if size > 0:
+        imgs = tf.compat.v1.image.resize_area(imgs, [size, size]).numpy()
+        H = H * size//128
+        W = W * size//128
+        focal = focal * size/128.
+    elif half_res:
+        imgs = tf.compat.v1.image.resize_area(imgs, [400, 400]).numpy()
+        H = H//2
+        W = W//2
+        focal = focal/2.
+
+
+    print(H, W)
+
+        
+    return imgs, poses, render_poses, [H, W, focal]
+
+
 
 

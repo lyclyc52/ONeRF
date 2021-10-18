@@ -1,13 +1,14 @@
 # To run: conda env create -f environment.yml
-name: unsup
+name: lyc
 channels:
     - conda-forge
 dependencies:
-    - python=3.7
+    - python=3.8.8
     - pip
-    # - cudatoolkit=10.2
-    - tensorflow-gpu==2.2.0
-    - numpy==1.19
+    - pytorch=1.7.1
+    - torchvision=0.8.2
+    - cudatoolkit=10.2
+    - tensorflow-gpu
     - matplotlib
     - imageio
     - imageio-ffmpeg
