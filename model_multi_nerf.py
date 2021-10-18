@@ -233,6 +233,7 @@ class Multiple_NeRF():
         self.images = images.to(device)
         self.poses = poses.to(device)
         self.hwf = hwf
+        self.masks = None
         if masks is not None:
             self.masks = masks # in same sequence
         feature_extractor = Encoder_VGG().to(device)
@@ -281,20 +282,25 @@ class Multiple_NeRF():
         img = self.images[img_id].reshape([3, -1])
         img = img[:, select_inds]
         loss_recon = F.mse_loss(rgb, img)
+        # loss_recon = 0
 
         if self.masks is not None:
-            mask = self.masks[img_id].reshape((-1, 1))
+            mask = self.masks[img_id].reshape((self.N_nerf, -1, 1))
             img = self.images[img_id].reshape([3, -1]).permute([1, 0])
-            mask = mask[select_inds]
+            mask = mask[:, select_inds, :]
             img = img[select_inds]
             raw1 = raws[0:1].reshape([-1, samples_per_ray, 4])
             raw2 = raws[1:2].reshape([-1, samples_per_ray, 4])
+            raw3 = raws[2:3].reshape([-1, samples_per_ray, 4])
+            # raws = raws.reshape([self.N_nerf, -1, samples_per_ray, 4])
             rgb1 = raw2outputs(raw1, z_vals, rays_d).permute([1, 0])
             rgb2 = raw2outputs(raw2, z_vals, rays_d).permute([1, 0])
-            loss1 = F.mse_loss(rgb1*mask, img*mask)
-            loss2 = F.mse_loss(rgb2*(1-mask), img*(1-mask))
+            rgb3 = raw2outputs(raw3, z_vals, rays_d).permute([1, 0])
+            loss1 = F.mse_loss(rgb1*mask[0], img*mask[0])
+            loss2 = F.mse_loss(rgb2*mask[1], img*mask[1])
+            loss3 = F.mse_loss(rgb3*mask[2], img*mask[2])
 
-            loss_recon += (loss1 + loss2)
+            loss_recon += (loss1 + loss2 + loss3)
 
             
 
@@ -302,9 +308,9 @@ class Multiple_NeRF():
         max_sigma, _ = torch.max(raw_densities, dim=0) # (N, 1)
 
         combined_sigma = combined_raws.reshape([-1, 4])[..., -1:]
-        loss_overlap = 0.4 * (combined_sigma - max_sigma).mean()
+        loss_overlap = (combined_sigma - max_sigma).mean()
 
-        loss = loss_recon + loss_overlap
+        loss = loss_recon #+ loss_overlap
 
         # update 
         self.optimizer.zero_grad()
@@ -345,11 +351,15 @@ class Multiple_NeRF():
             rgb = rgb.reshape((3, H, W)).permute([1, 2, 0])
 
             rgb_locals = []
-            for k in range(self.N_nerf):
-                rgb_local = raw2outputs(masked_raws[k].reshape([-1,samples_per_ray,4]), 
+            if self.masks is not None:
+                mask = self.masks[img_id]
+            for k in range(self.N_nerf): # todel
+                rgb_local = raw2outputs(raws[k].reshape([-1,samples_per_ray,4]), 
                     z_vals, rays_d)
                 rgb_local = rgb_local.reshape((3, H, W)).permute([1, 2, 0])
+                rgb_local = rgb_local * mask[0, k,..., None]
                 rgb_locals.append(rgb_local)
+            rgb = torch.sum(torch.stack(rgb_locals, dim=0), dim=0)
 
         return rgb, rgb_locals
 

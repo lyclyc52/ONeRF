@@ -5,7 +5,7 @@ import numpy as np
 import imageio 
 import json
 
-def load_blender_data(basedir, half_res=False, testskip=1, size=-1):
+def load_blender_data(basedir, half_res=False, testskip=1, size=-1, trainskip=1):
     splits = ['train', 'val', 'test']
     metas = {}
     for s in splits:
@@ -20,7 +20,7 @@ def load_blender_data(basedir, half_res=False, testskip=1, size=-1):
         imgs = []
         poses = []
         if s=='train' or testskip==0:
-            skip = 1
+            skip = trainskip
         else:
             skip = testskip
             
@@ -46,21 +46,27 @@ def load_blender_data(basedir, half_res=False, testskip=1, size=-1):
 
     if basedir=='./data/nerf_synthetic/clevr_100_2objects':
         focal = 875.
+    if basedir=='./data/nerf_synthetic/clevr2':
+        focal = 875.
+    if basedir=='./data/nerf_synthetic/clevrtex':
+        focal = 875.
+    if basedir=='./data/nerf_synthetic/shape_tex':
+        focal = 875.
     
     render_poses = None
     
     if size > 0:
         imgs = torch.from_numpy(imgs).permute([0,3,1,2])[:, :3, ...]
         imgs = TF.resize(imgs, size=size)
-        H = H * size//800
-        W = W * size//800
-        focal = focal * size/800.
+        focal = focal * size/H
+        H = H * size//H
+        W = W * size//W
     elif half_res:
         imgs = torch.from_numpy(imgs).permute([0,3,1,2])[:, :3, ...]
         imgs = TF.resize(imgs, size=400)
-        H = H * 128//800
-        W = W * 128//800
-        focal = focal * 128/800.
+        focal = focal * 128/H
+        H = H * 128//H
+        W = W * 128//W
         
     return imgs, poses, render_poses, [H, W, focal], i_split
 
