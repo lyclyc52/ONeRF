@@ -168,26 +168,24 @@ def _l2norm(inp, dim):
 
 
 
-
 def main():
-    weights_dir = './results/testing_3/weights'
-    img_dir = './results/testing_11/imgs'
+    img_dir = './results/testing_7/first_cluster'
 
     input_size = 128
 
-    os.makedirs(weights_dir, exist_ok=True)
+
     os.makedirs(img_dir, exist_ok=True)
 
 
 
-    datadir = 'data/nerf_synthetic/clevr_depth'
+    datadir = 'data/nerf_synthetic/clevr_bg5'
 
 
     images, poses, depth_maps, render_poses, hwf, i_split = load_data(
                 datadir, True, 1, size = input_size)
 
 
-    N_imgs=49
+    N_imgs= 70
     images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
     images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
 
@@ -207,7 +205,9 @@ def main():
     for iter in range(1):
         # val = [0, 3, 25, 39]
         # val = [t for t in range(iter*2,iter*2+4)]
-        val = [0, 2, 3, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 45, 46, 48]
+        # val = [0, 2, 3, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 45, 46, 48] #for simple clevr
+
+        val = [0, 3, 4, 5, 6, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
         print(val)
         val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
         val_images, val_depths, val_poses = val_images.to(device), val_depths.to(device), val_poses.to(device)
@@ -229,7 +229,7 @@ def main():
 
 
 
-        w = 3.
+        w = .5
         # slots = slots.T
         # position = position.T
 
@@ -256,7 +256,7 @@ def main():
 
 
 
-        for i in range(50):
+        for i in range(100):
             z=[]
             z_p=[]
             for j in range(num_slots):

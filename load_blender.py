@@ -85,9 +85,9 @@ def load_blender_data(basedir, half_res=False, testskip=1, size=-1):
 
     if size > 0:
         imgs = tf.compat.v1.image.resize_area(imgs, [size, size]).numpy()
-        H = H * size//800
-        W = W * size//800
-        focal = focal * size/800.
+        H = H * size//400
+        W = W * size//400
+        focal = focal * size/400.
     elif half_res:
         imgs = tf.compat.v1.image.resize_area(imgs, [400, 400]).numpy()
         H = H//2

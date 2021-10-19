@@ -1,10 +1,11 @@
 import os
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ["CUDA_VISIBLE_DEVICES"]='5,6'
+os.environ["CUDA_VISIBLE_DEVICES"]='8'
 from model_clustering import *
 from load_blender import *
 from run_nerf_helpers import *
 from run_nerf import *
+from KM_testing import *
 import torch
 
 
@@ -91,12 +92,13 @@ class SobelOperator(nn.Module):
 # depth_maps = tf.compat.v1.image.resize_area(depth_maps, [256, 256]).numpy()
 # depth_maps = tf.squeeze(depth_maps, axis=-1).numpy()
 
-weights_dir = './results/testing_3/weights'
-img_dir = './results/testing_11/segmentation'
-basedir = './results/testing_11/mask_refine'
+# def main():
+
+img_dir = './results/testing_9/segmentation'
+basedir = './data/nerf_synthetic/clevr_bg6/train'
+model_path = './results/testing_9/model'
 
 
-os.makedirs(weights_dir, exist_ok=True)
 os.makedirs(img_dir, exist_ok=True)
 
 
@@ -105,13 +107,26 @@ args = parser.parse_args()
 
 
 
-num_slot = 7
 
-# images, poses, render_poses, hwf, i_split = load_blender_data(
-#             args.datadir, args.half_res, args.testskip, size = 256)
-# N_imgs=100
+
+
+# datadir = 'data/nerf_synthetic/clevrtex'
+
+# input_size = 400
+# images, poses, depth_maps, render_poses, hwf, i_split = load_data(
+#             datadir, True, 1, size = input_size)
+
+
+# N_imgs=70
 # images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
 # images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
+
+# val = [0, 2, 3, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 45, 46, 48]
+# imgs = images[val]
+
+
+
+num_slot = 12
 loss_fn = torch.nn.CrossEntropyLoss()
 
 
@@ -128,9 +143,16 @@ model.to(device)
 
 
 
+# imgs = []
+# for i in range(15):
+#     fname = os.path.join(basedir, 'seg_input{:01d}.png'.format(i,1))
+#     imgs.append(imageio.imread(fname))
+
+
+val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
 imgs = []
-for i in range(16):
-    fname = os.path.join(basedir, 'input{:01d}.png'.format(i,1))
+for i in val:
+    fname = os.path.join(basedir, 'r_{:01d}.png'.format(i,1))
     imgs.append(imageio.imread(fname))
 
 
@@ -138,6 +160,9 @@ imgs = (np.array(imgs) / 255.).astype(np.float32) # keep all 4 channels (RGBA)
 
 imgs= imgs[...,:3]
 imgs = torch.from_numpy(imgs)
+
+
+
 imgs = imgs.to(device)
 
 
@@ -152,7 +177,9 @@ HPz_target = torch.zeros(B, H, W-1, num_slot)
 HPy_target = HPy_target.to(device)
 HPz_target = HPz_target.to(device)
 
-for i in range(1000):
+
+
+for i in range(500):
     optimizer.zero_grad()
     
 
@@ -190,17 +217,32 @@ for i in range(1000):
     
     loss.backward()
     optimizer.step()
-    if i % 50 ==0:
+    if (i % 100 ==0 and i>0) or (i == 50):
         print(i)
         print(loss)
 
         im_target = target.data.cpu().numpy()
-        im_target_rgb = np.array([label_colours[ c ] for c in im_target])
-        im_target_rgb = im_target_rgb.reshape( [B,H,W,3] ).astype( np.uint8 )
-        for b in range(B):
-            imageio.imwrite(os.path.join(img_dir, 'val_{:06d}__slot{:01d}.jpg'.format(i,b)), im_target_rgb[b])
+        im_target = im_target.reshape([B,H,W])
+        # im_target_rgb = np.array([label_colours[ c ] for c in im_target])
+        # im_target_rgb = im_target_rgb.reshape( [B,H,W,3] ).astype( np.uint8 )
+
+        cluster = np.unique(im_target)
 
         
-        print(np.unique(im_target).shape)
+        print(cluster.shape[0])
+
+        for c in range(cluster.shape[0]):
+            for b in range(B):
+                mask = (im_target[b] == cluster[c])
+                mask = mask.astype(int)
+                mask = mask * 255
+                mask = mask[..., None]
+                mask = mask.astype(np.uint8)
+                imageio.imwrite(os.path.join(img_dir, 'val_{:06d}_r_{:1d}_slot{:01d}.png'.format(i,b,c)), mask)
+
+
+        torch.save(model.state_dict(), model_path)
+
+            
 
 

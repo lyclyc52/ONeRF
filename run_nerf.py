@@ -617,13 +617,13 @@ def train():
 
     elif args.dataset_type == 'blender':
         images, poses, render_poses, hwf, i_split = load_blender_data(
-            args.datadir, args.half_res, args.testskip)
+            args.datadir, args.half_res, args.testskip, size = 400)
         print('Loaded blender', images.shape,
               render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
-        near = 4.
-        far = 16.
+        near = 1.
+        far = 29.
 
         if args.white_bkgd:
             images = images[..., :3]*images[..., -1:] + (1.-images[..., -1:])
@@ -747,6 +747,15 @@ def train():
         i_batch = 0
 
     N_iters = 1000000
+
+    i_train = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
+    71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+
+    i_test = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
+    71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+
+    i_val = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
+    71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
@@ -886,8 +895,8 @@ def train():
                 if args.N_importance > 0:
                     tf.contrib.summary.scalar('psnr0', psnr0)
 
-        if i % 1 == 0: #args.i_img == 0:
-
+        if i % args.i_img == 0:
+            print("Save image")
             # Log a rendered validation view to Tensorboard
             img_i = np.random.choice(i_val)
             target = images[img_i]
@@ -896,6 +905,10 @@ def train():
             rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, c2w=pose,
                                             **render_kwargs_test)
 
+            depth = 1/disp
+
+            depth = depth /30.
+
             psnr = mse2psnr(img2mse(rgb, target))
             
             # Save out the validation image for Tensorboard-free monitoring
@@ -903,7 +916,7 @@ def train():
             if i==0:
                 os.makedirs(testimgdir, exist_ok=True)
             imageio.imwrite(os.path.join(testimgdir, '{:06d}.png'.format(i)), to8b(rgb))
-            imageio.imwrite(os.path.join(testimgdir, '{:06d}_depth.png'.format(i)), to8b(disp))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_depth.png'.format(i)), to8b(depth))
 
             with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
 
@@ -930,5 +943,5 @@ def train():
 
 
 if __name__ == '__main__':
-    os.environ['CUDA_VISIBLE_DEVICES']='8'
+    os.environ['CUDA_VISIBLE_DEVICES']='6,7'
     train()
