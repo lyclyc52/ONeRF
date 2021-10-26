@@ -77,6 +77,7 @@ def load_blender_data(basedir, half_res=False, testskip=1, size=-1):
     camera_angle_x = float(meta['camera_angle_x'])
     focal = .5 * W / np.tan(.5 * camera_angle_x)
 
+
     if basedir=='./data/nerf_synthetic/clevr_100_2objects':
         focal = 875.
     
@@ -85,9 +86,9 @@ def load_blender_data(basedir, half_res=False, testskip=1, size=-1):
 
     if size > 0:
         imgs = tf.compat.v1.image.resize_area(imgs, [size, size]).numpy()
-        H = H * size//400
-        W = W * size//400
-        focal = focal * size/400.
+        focal = focal * size/W
+        H = size
+        W = size
     elif half_res:
         imgs = tf.compat.v1.image.resize_area(imgs, [400, 400]).numpy()
         H = H//2
