@@ -63,7 +63,7 @@ def load_data(basedir, half_res=False, testskip=1, size=-1):
     focal = .5 * W / np.tan(.5 * camera_angle_x)
 
     # if basedir=='./data/nerf_synthetic/clevr_100_2objects':
-    focal = 875.
+    focal = 875./2
     
     render_poses = tf.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]],0)
     
@@ -89,7 +89,7 @@ def KM_clustering(f, f_p, w, device):
     slots = slots.to(device)
     position = position.to(device)
 
-    for i in range(100):
+    for i in range(200):
         z=[]
         z_p=[]
         for j in range(num_slots):
@@ -224,3 +224,31 @@ def train(imgs, base_dir):
             torch.save(model.state_dict(), model_path)
 
     return model, im_target
+
+
+
+class MyNet(nn.Module):
+    def __init__(self,input_dim, slot_d=64, num_slot=3):
+        super(MyNet, self).__init__()
+        self.conv1 = nn.Conv2d(input_dim, slot_d, kernel_size=3, stride=1, padding=1 )
+        self.bn1 = nn.BatchNorm2d(slot_d)
+        self.conv2 = nn.ModuleList()
+        self.bn2 = nn.ModuleList()
+        self.nConv = 2
+        for i in range(self.nConv-1):
+            self.conv2.append( nn.Conv2d(slot_d, slot_d, kernel_size=3, stride=1, padding=1 ) )
+            self.bn2.append( nn.BatchNorm2d(slot_d) )
+        self.conv3 = nn.Conv2d(slot_d, num_slot, kernel_size=1, stride=1, padding=0 )
+        self.bn3 = nn.BatchNorm2d(num_slot)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = F.relu( x )
+        x = self.bn1(x)
+        for i in range(self.nConv-1):
+            x = self.conv2[i](x)
+            x = F.relu( x )
+            x = self.bn2[i](x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        return x

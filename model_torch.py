@@ -1482,3 +1482,266 @@ class Encoder_Decoder_nerf_attn():
         else:
             self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+
+
+class NeRF_Ind(nn.Module):
+    def __init__(self, position_emb_dim=5, mlp_hidden_size=64):
+        super().__init__()
+
+        input_dim = position_emb_dim*3*2 +3
+        self.mlp_hidden_size = mlp_hidden_size
+
+        self.decoder_mlp_layer_0 = nn.Sequential(
+            nn.Linear(input_dim, mlp_hidden_size), 
+            nn.ReLU(True),
+            nn.Linear(mlp_hidden_size, mlp_hidden_size), 
+            nn.ReLU(True),
+            nn.Linear(mlp_hidden_size, mlp_hidden_size), 
+            nn.ReLU(True))
+
+        self.decoder_mlp_layer_1 =  nn.Sequential(        
+            nn.Linear(mlp_hidden_size+input_dim, mlp_hidden_size), 
+            nn.ReLU(True),
+            nn.Linear(mlp_hidden_size, mlp_hidden_size), 
+            nn.ReLU(True),
+            nn.Linear(mlp_hidden_size, mlp_hidden_size), 
+            nn.ReLU(True))
+
+        self.decoder_density = nn.Linear(mlp_hidden_size, 1)
+
+        self.decoder_latent = nn.Linear(mlp_hidden_size, mlp_hidden_size)
+        self.decoder_color = nn.Sequential(nn.Linear(mlp_hidden_size, mlp_hidden_size//4),
+                                     nn.ReLU(True),
+                                     nn.Linear(mlp_hidden_size//4, 3))
+
+
+    def forward(self, pts):
+        # pts: (P*D, 3)
+
+        encoded_pts = embedding_fn(pts)
+
+        chunk = 1024*32
+        output = []
+        input = encoded_pts
+
+        print(input.shape)
+
+        for i in range(0, input.shape[0], chunk):
+            tmp = self.decoder_mlp_layer_0(input[i:i+chunk])
+            tmp = self.decoder_mlp_layer_1(torch.cat([input[i:i+chunk], tmp], dim=-1))
+
+            raw_density = self.decoder_density(tmp)
+            latent = self.decoder_latent(tmp)  
+            raw_color = self.decoder_color(latent)  
+             
+            output_c = torch.cat([raw_color,raw_density], dim=-1)
+
+            output.append(output_c)
+
+        all_raws = torch.cat(output, dim=0)
+        # activate the output
+        raw_densities = F.relu(all_raws[:, -1:], True)
+        raw_rgbs = (all_raws[:, :3].tanh() + 1) / 2
+        all_raws = torch.cat([raw_densities, raw_rgbs], dim=-1)
+
+        return all_raws
+
+
+
+
+class Multi_Nerf():
+    def __init__(self, cam_param, num_slots = 3, lr = 5e-4):
+
+
+        self.num_slots = num_slots
+        self.cam_param = cam_param
+
+
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        print(self.device)
+
+
+
+        self.decoder = []
+        for s in range(num_slots):
+            self.decoder.append(NeRF_Ind())
+            self.decoder[s].to(self.device)
+
+
+
+        self.optimizer = optim.Adam(
+            chain(self.decoder[0].parameters(),self.decoder[1].parameters(),self.decoder[2].parameters())
+        , lr=lr)
+
+    def forward(self, images, masks, c2ws, isTrain=True):
+        '''
+        input:  images: images  BxHxWx3
+                d: depth map BxHxW
+                c2w: camera-to-world matrix Bx4x4
+        '''
+        # if training[0]==1:
+        #     images, depth_maps, c2ws = images[0:1], depth_maps[0:1], c2ws[0:1]
+
+        H, W, focal = self.cam_param
+
+        images = images.to(self.device)
+        masks = masks.to(self.device)
+        c2ws = c2ws.to(self.device)
+
+
+
+
+
+        if isTrain==True:
+            pts, z_vals, rays_d, select_inds = sampling_points(self.cam_param, c2ws, is_selection=True)
+        else:
+            pts, z_vals,rays_d = sampling_points(self.cam_param, c2ws)
+
+
+
+        B,N,N_samples,_ = pts.shape
+
+
+ 
+        pts = pts[None,...]
+        pts = pts.expand([self.num_slots, -1, -1, -1, -1])
+
+        pts = torch.reshape(pts, [self.num_slots, -1, 3])
+
+        raws_ind = []
+        for i in range(self.num_slots):
+            raws_ind.append(self.decoder[i](pts))
+
+
+        # }
+
+
+
+        all_raws = torch.stack(raws_ind)
+
+
+
+        raw_masks = F.relu(all_raws[:, :, -1:], True)  # KxNx1
+        masks = raw_masks / (raw_masks.sum(dim=0) + 1e-5)  # KxNx1
+        raw_rgb = (all_raws[:, :, :3].tanh() + 1) / 2
+
+        raw_sigma = raw_masks
+
+        unmasked_raws = torch.cat([raw_rgb, raw_sigma], dim=2)  # KxNx4
+        masked_raws = unmasked_raws * masks
+        raws = masked_raws.sum(dim=0)
+
+
+        raws = raws.reshape([B,N,N_samples,4])
+        masked_raws = masked_raws.reshape([self.num_slots,B,N,N_samples,4])
+        unmasked_raws = unmasked_raws.reshape([self.num_slots,B,N,N_samples,4])
+
+        raws = raws.reshape([-1,N_samples,4])
+        z_vals = z_vals.reshape([-1,N_samples])
+        rays_d = rays_d.reshape([-1,3])
+
+
+        rgb = raw2outputs(raws, z_vals, rays_d)
+        rgb = rgb.reshape([B,N,3])
+
+
+        slot_masked_rgb = []
+        for s in range(self.num_slots):
+            slot_mask_raws = masked_raws[s]
+            slot_mask_raws = slot_mask_raws.reshape([-1,N_samples,4])
+            slot_masked_rgb.append(raw2outputs(slot_mask_raws, z_vals, rays_d).reshape([B,N,3]))
+
+
+
+        if isTrain==True:
+            # select_inds_x, select_inds_y, N_selection = select_inds
+            loss_img = torch.reshape(images, [B, -1, 3])
+            loss_img_s = loss_img[:,select_inds,...]
+            self.loss = L2_loss(rgb, loss_img_s)
+            for s in range(self.num_slots):
+                mask = masks[:,s,:]
+                loss_mask = torch.reshape(mask, [B, -1, 3])
+                loss_slot_img = loss_img * loss_mask
+                loss_slot_img_s = loss_slot_img[:,select_inds,...]
+                self.loss = self.loss + L2_loss(slot_masked_rgb[s], loss_img_s)
+            return 
+            
+            # masked_raws_sigma = masked_raws[..., -1:]
+            # max_sigma,_ = masked_raws_sigma.permute([1,2,3,4,0]).max(dim=-1)
+            # self.overlap_loss = torch.mean(raws[...,-1:]-max_sigma)
+            
+
+
+        else:
+            slot_masked_rgb = []
+            for s in range(self.num_slots):
+                slot_mask_raws = masked_raws[s]
+                slot_mask_raws = slot_mask_raws.reshape([-1,N_samples,4])
+                slot_masked_rgb.append(raw2outputs(slot_mask_raws, z_vals, rays_d).reshape([B,N,3]))
+
+            slot_unmasked_rgb = []
+            for s in range(self.num_slots):
+                slot_unmask_raws = unmasked_raws[s]
+                slot_unmask_raws = slot_unmask_raws.reshape([-1,N_samples,4])
+                slot_unmasked_rgb.append(raw2outputs(slot_unmask_raws, z_vals, rays_d).reshape([B,N,3]))
+
+            rgb = torch.reshape(rgb, [B, H, W, 3])
+            for s in range(self.num_slots):
+                slot_masked_rgb[s] = torch.reshape(slot_masked_rgb[s], [B, H, W, 3])
+
+            for s in range(self.num_slots):
+                slot_unmasked_rgb[s] = torch.reshape(slot_unmasked_rgb[s], [B, H, W, 3])
+        
+            return rgb, slot_masked_rgb, slot_unmasked_rgb
+
+    def backward(self, iter):
+
+
+        loss = self.loss 
+
+        # if iter >= 1600000:
+        #     k_o = max(1., (iter-1600000)/10000) * self.k_o
+        #     loss = loss + k_o * self.overlap_loss
+        loss.backward()
+        
+
+    def update_grad(self, images, depth_maps, c2ws, iter):
+
+        self.forward(images, depth_maps, c2ws)
+
+
+        self.optimizer.zero_grad()
+        self.backward(iter)
+
+        self.optimizer.step()
+
+        return self.loss
+
+    def save_weights(self, path, i):
+
+
+        torch.save({
+            'epoch': i,
+            'encoder_state_dict': self.encoder.state_dict(),
+            'slot_attention_state_dict': self.slot_attention.state_dict(),
+            'decoder_state_dict': self.decoder.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'loss': self.loss,
+        }, os.path.join(path,'model_{:08d}.pt'.format(i)))
+
+
+
+    def load_weights(self, path, i):
+        if i==0:
+            return
+        checkpoint = torch.load(os.path.join(path,'model_{:08d}.pt'.format(i)))
+        if self.vgg==False:
+            self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
+        self.slot_attention.load_state_dict(checkpoint['slot_attention_state_dict'])
+        if self.separate_decoder:
+            for s in self.num_slots:
+                self.decoder.load_state_dict(checkpoint['decoder_state_list'][s])
+        else:
+            self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])

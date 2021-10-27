@@ -623,7 +623,7 @@ def train():
         i_train, i_val, i_test = i_split
 
         near = 1.
-        far = 29.
+        far = 20.
 
         if args.white_bkgd:
             images = images[..., :3]*images[..., -1:] + (1.-images[..., -1:])
@@ -748,14 +748,31 @@ def train():
 
     N_iters = 1000000
 
-    i_train = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
-    71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+    # i_train = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
+    # 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
 
-    i_test = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
-    71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+    # i_test = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
+    # 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
 
-    i_val = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
-    71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+    # i_val = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
+    # 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+
+    i_train = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
+    i_test = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
+    i_val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
+
+
+    mask_dir = 'results/testing_8/segmentation'
+    slot = []
+    for i in range(15):
+        image_file = os.path.join(mask_dir, 'val_000950_r_{:d}_slot0.jpg'.format(i))
+        slot.append(imageio.imread(image_file))
+    slot = np.stack(slot, 0)
+    slot = slot / 255.
+
+    
+    images[i_train] = images[i_train] * slot[..., None] + (1. - slot[..., None])
+
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
@@ -916,8 +933,8 @@ def train():
             if i==0:
                 os.makedirs(testimgdir, exist_ok=True)
             imageio.imwrite(os.path.join(testimgdir, '{:06d}.png'.format(i)), to8b(rgb))
-            imageio.imwrite(os.path.join(testimgdir, '{:06d}_depth.png'.format(i)), to8b(depth))
-
+            # imageio.imwrite(os.path.join(testimgdir, '{:06d}_depth.png'.format(i)), to8b(depth))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_gt.png'.format(i)), to8b(target))
             with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
 
                 tf.contrib.summary.image('rgb', to8b(rgb)[tf.newaxis])
@@ -943,5 +960,5 @@ def train():
 
 
 if __name__ == '__main__':
-    os.environ['CUDA_VISIBLE_DEVICES']='6,7'
+    os.environ['CUDA_VISIBLE_DEVICES']='8'
     train()

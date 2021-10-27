@@ -133,7 +133,7 @@ def load_new_data(basedir, half_res=False, testskip=1, size=-1):
     
     H, W = imgs[0].shape[:2]
 
-    focal = 875.
+    focal = 875./2
     
     render_poses = tf.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]],0)
     

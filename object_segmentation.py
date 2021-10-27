@@ -1,10 +1,10 @@
 from object_segmentation_helper import *
 os.environ['CUDA_VISIBLE_DEVICES'] = '8'
 
-base_dir = './results/testing_8'
+base_dir = './results/testing_10'
 
 
-datadir = 'data/nerf_synthetic/clevr_bg6'
+datadir = 'data/nerf_synthetic/clevr_c_d2'
 
 
 input_size = 400
@@ -40,11 +40,14 @@ device = torch.device("cuda:0" )
 
 
 # val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60] #for  clevrtex
-val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
+
+# val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
+val = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 print(val)
 
 
 val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
+
 
 
 
@@ -79,7 +82,7 @@ with torch.no_grad():
     f_p = f[...,C-3:]
     f = f[...,:C-3]
 
-    w = 3.
+    w = .5
 
     attn_logits = KM_clustering(f, f_p, w, device)
     attn = attn_logits.softmax(dim=-1)

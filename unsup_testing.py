@@ -94,9 +94,9 @@ class SobelOperator(nn.Module):
 
 # def main():
 
-img_dir = './results/testing_9/segmentation'
-basedir = './data/nerf_synthetic/clevr_bg6/train'
-model_path = './results/testing_9/model'
+img_dir = './results/testing_10/segmentation'
+basedir = './results/testing_10/mask_refine'
+model_path = './results/testing_10/model'
 
 
 os.makedirs(img_dir, exist_ok=True)
@@ -121,12 +121,14 @@ args = parser.parse_args()
 # images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
 # images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
 
-# val = [0, 2, 3, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 45, 46, 48]
+# # val = [0, 2, 3, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 45, 46, 48]
+# # val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
+# val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60] #for  clevrtex
 # imgs = images[val]
 
 
 
-num_slot = 12
+num_slot = 8
 loss_fn = torch.nn.CrossEntropyLoss()
 
 
@@ -143,20 +145,16 @@ model.to(device)
 
 
 
-# imgs = []
-# for i in range(15):
-#     fname = os.path.join(basedir, 'seg_input{:01d}.png'.format(i,1))
-#     imgs.append(imageio.imread(fname))
-
-
-val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
 imgs = []
-for i in val:
-    fname = os.path.join(basedir, 'r_{:01d}.png'.format(i,1))
+for i in range(15):
+    fname = os.path.join(basedir, 'seg_input{:d}.png'.format(i))
     imgs.append(imageio.imread(fname))
 
 
-imgs = (np.array(imgs) / 255.).astype(np.float32) # keep all 4 channels (RGBA)
+
+
+
+imgs = (np.array(imgs) / 255.).astype(np.float32) 
 
 imgs= imgs[...,:3]
 imgs = torch.from_numpy(imgs)
@@ -179,7 +177,7 @@ HPz_target = HPz_target.to(device)
 
 
 
-for i in range(500):
+for i in range(501):
     optimizer.zero_grad()
     
 
