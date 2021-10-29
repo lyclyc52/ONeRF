@@ -57,7 +57,8 @@ def render_rays(ray_batch,
                 white_bkgd=False,
                 raw_noise_std=0.,
                 verbose=False,
-                select_net=-1):
+                select_net=-1,
+                overlap_loss=False):
     """Volumetric rendering.
 
     Args:
@@ -108,8 +109,8 @@ def render_rays(ray_batch,
         """
         # Function for computing density from model prediction. This value is
         # strictly between [0, 1].
-        def raw2alpha(raw, dists, act_fn=tf.nn.relu): return 1.0 - \
-            tf.exp(-act_fn(raw) * dists)
+        def raw2alpha(raw, dists): return 1.0 - \
+            tf.exp(-raw * dists)
 
         # Compute 'distance' (in time) between each integration time along a ray.
         dists = z_vals[..., 1:] - z_vals[..., :-1]
@@ -208,7 +209,25 @@ def render_rays(ray_batch,
         raw0 = network_query_fn(pts, viewdirs, network_fn[0])  # [N_rays, N_samples, 4]
         raw1 = network_query_fn(pts, viewdirs, network_fn[1])
         raw2 = network_query_fn(pts, viewdirs, network_fn[2])
-        raw = raw0 + raw1 + raw2
+        sigma0 = tf.nn.relu(raw0[..., 3:])
+        sigma1 = tf.nn.relu(raw1[..., 3:])
+        sigma2 = tf.nn.relu(raw2[..., 3:])
+        raw0 = tf.concat([raw0[..., :3], sigma0], -1)
+        raw1 = tf.concat([raw1[..., :3], sigma1], -1)
+        raw2 = tf.concat([raw0[..., :3], sigma2], -1)
+
+        if overlap_loss:
+            densities = tf.stack([raw0[..., 3:], raw1[..., 3:], raw2[..., 3:]]) # (3, N, N_s, 1)
+            colors = tf.stack([raw0[..., :3], raw1[..., :3], raw2[..., :3]]) # (3, N, N_s, 3)
+            wts = densities / (tf.reduce_sum(densities, axis=0) + 1e-6)
+            color = tf.reduce_sum(colors * wts, axis=0)
+            density = tf.reduce_sum(densities, axis=0)
+            raw = tf.concat([color, density], axis=-1)
+            # overlap_s = tf.reduce_sum(tf.reduce_sum(densities, 0) - tf.reduce_max(densities))
+        else:
+            raw = raw0 + raw1 + raw2
+
+
 
         rgb_map_s0, _, _, _, _ = raw2outputs(
             raw0, z_vals, rays_d)
@@ -221,11 +240,15 @@ def render_rays(ray_batch,
         
     else:
         raw = network_query_fn(pts, viewdirs, network_fn[select_net])
+        sigma = tf.nn.relu(raw[..., 3:])
+        raw = tf.concat([raw[..., :3], sigma], -1)
         rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
             raw, z_vals, rays_d)
 
     if N_importance > 0:
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
+        if select_net == -1:
+            raw0_c, raw1_c, raw2_c = raw0, raw1, raw2
 
         # Obtain additional integration times to evaluate based on the weights
         # assigned to colors in the coarse model.
@@ -247,7 +270,23 @@ def render_rays(ray_batch,
             raw0 = network_query_fn(pts, viewdirs, run_fn[0])  # [N_rays, N_samples, 4]
             raw1 = network_query_fn(pts, viewdirs, run_fn[1])
             raw2 = network_query_fn(pts, viewdirs, run_fn[2])
-            raw = raw0 + raw1 + raw2
+            sigma0 = tf.nn.relu(raw0[..., 3:])
+            sigma1 = tf.nn.relu(raw1[..., 3:])
+            sigma2 = tf.nn.relu(raw2[..., 3:])
+            raw0 = tf.concat([raw0[..., :3], sigma0], -1)
+            raw1 = tf.concat([raw1[..., :3], sigma1], -1)
+            raw2 = tf.concat([raw0[..., :3], sigma2], -1)
+            if overlap_loss:
+                densities = tf.stack([raw0[..., 3:], raw1[..., 3:], raw2[..., 3:]]) # (3, N, N_s, 1)
+                colors = tf.stack([raw0[..., :3], raw1[..., :3], raw2[..., :3]]) # (3, N, N_s, 3)
+                wts = densities / (tf.reduce_sum(densities, axis=0) + 1e-6)
+                color = tf.reduce_sum(colors * wts, axis=0)
+                density = tf.reduce_sum(densities, axis=0)
+                raw = tf.concat([color, density], axis=-1)
+                # overlap_s += tf.reduce_sum(tf.reduce_sum(densities, 0) - tf.reduce_max(densities))
+            else:
+                raw = raw0 + raw1 + raw2
+
 
             rgb_map_s0, _, acc_map_s0, _, _ = raw2outputs(
                 raw0, z_vals, rays_d)
@@ -260,6 +299,8 @@ def render_rays(ray_batch,
                 raw, z_vals, rays_d)
         else:
             raw = network_query_fn(pts, viewdirs, run_fn[select_net])
+            sigma = tf.nn.relu(raw[..., 3:])
+            raw = tf.concat([raw[..., :3], sigma], -1)
             rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
                 raw, z_vals, rays_d)
 
@@ -268,6 +309,13 @@ def render_rays(ray_batch,
                     'rgb_s2': rgb_map_s2,
                     'disp_map': disp_map, 'acc_map': acc_map, 
                     'acc_s0': acc_map_s0, 'acc_s1': acc_map_s1, 'acc_s2': acc_map_s2}
+        if overlap_loss:
+            ret['raw0'] = raw0
+            ret['raw1'] = raw1
+            ret['raw2'] = raw2
+            ret['raw0_c'] = raw0_c
+            ret['raw1_c'] = raw1_c
+            ret['raw2_c'] = raw2_c
     else:
         ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map}
 
@@ -285,15 +333,21 @@ def render_rays(ray_batch,
     return ret
 
 
-def batchify_rays(rays_flat, chunk=1024*32, select_net=-1, **kwargs):
+def batchify_rays(rays_flat, chunk=1024*32, select_net=-1, 
+                    overlap_loss=False,
+                    **kwargs):
     """Render rays in smaller minibatches to avoid OOM."""
     all_ret = {}
     for i in range(0, rays_flat.shape[0], chunk):
-        ret = render_rays(rays_flat[i:i+chunk], select_net=select_net, **kwargs)
+        ret = render_rays(rays_flat[i:i+chunk], select_net=select_net, 
+                overlap_loss=overlap_loss, **kwargs)
         for k in ret:
             if k not in all_ret:
                 all_ret[k] = []
-            all_ret[k].append(ret[k])
+            if k == 'overlap_s':
+                all_ret[k] += ret[k]
+            else:
+                all_ret[k].append(ret[k])
 
     all_ret = {k: tf.concat(all_ret[k], 0) for k in all_ret}
     return all_ret
@@ -304,6 +358,7 @@ def render(H, W, focal,
            near=0., far=1.,
            use_viewdirs=False, c2w_staticcam=None,
            select_net = -1,
+           overlap_loss=False,
            **kwargs):
     """Render rays
 
@@ -372,10 +427,11 @@ def render(H, W, focal,
         rays = tf.concat([rays, viewdirs], axis=-1)
 
     # Render and reshape
-    all_ret = batchify_rays(rays, chunk, select_net, **kwargs)
+    all_ret = batchify_rays(rays, chunk, select_net, overlap_loss, **kwargs)
     for k in all_ret:
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
-        all_ret[k] = tf.reshape(all_ret[k], k_sh)
+        if k != 'overlap_s':
+            all_ret[k] = tf.reshape(all_ret[k], k_sh)
 
     if select_net == -1:
         k_extract = ['rgb_map', 'rgb_s0', 'rgb_s1', 'rgb_s2', 'disp_map', 'acc_map',
@@ -685,17 +741,30 @@ def train():
         if args.datadir == './data/nerf_synthetic/shape_tex':
             mask_prefix = 'data/nerf_synthetic/shape_tex/masks/val_000950_r_'
             near = 0.1
-            far = 6.
+            far = 4.
             i_train = [4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
             i_val = i_test = [3, 22, 25, 32, 39, 44]
         elif args.datadir == './data/nerf_synthetic/clevr_c_d2':
             mask_prefix = 'data/nerf_synthetic/clevr_c_d2/masks/val_000200_r_'
             near = 0.1
-            far = 20.
+            far = 23.
             i_train = list(range(15))
             i_val = i_test = [4, 8]
             for t in i_val:
                 i_train.remove(t)
+        elif args.datadir == './data/nerf_synthetic/shape_tex_v1':
+            mask_prefix = 'data/nerf_synthetic/shape_tex_v1/masks/val_000500_r_'
+            near = 0.1
+            far = 20.
+            i_train = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60]
+            i_val = i_test = [5, 22, 25, 32, 39, 44]
+        elif args.datadir == './data/nerf_synthetic/clevr_c_d4':
+            mask_prefix = 'data/nerf_synthetic/clevr_c_d4/masks/val_000200_r_'
+            near = 0.1
+            far = 20.
+            i_train = [0,1,2,9,10,11,12,13,14,16,17,24,25,27,28]
+            i_val = i_test = [5, 22, 26, 32, 39, 44]
+
         
         images_full_train = []
         masks0, masks1, masks2 = [], [], []
@@ -713,12 +782,24 @@ def train():
                 mask1 = (mask1 > 128).astype(np.float32)
                 mask2 = imageio.imread(mask_prefix+f'{k}_slot3.png')
                 mask2 = (mask2 > 128).astype(np.float32)
-            
+            elif args.datadir == './data/nerf_synthetic/shape_tex_v1':
+                mask1 = imageio.imread(mask_prefix+f'{k}_slot1.jpg')
+                mask1 = (mask1 > 128).astype(np.float32)
+                mask2 = imageio.imread(mask_prefix+f'{k}_slot2.jpg')
+                mask2 = (mask2 > 128).astype(np.float32)
+            elif args.datadir == './data/nerf_synthetic/clevr_c_d4':
+                mask1 = imageio.imread(mask_prefix+f'{k}_slot2.png')
+                mask1 = (mask1 > 128).astype(np.float32)
+                mask2 = imageio.imread(mask_prefix+f'{k}_slot3.png')
+                mask2 = (mask2 > 128).astype(np.float32)
+
             mask0 = 1 - (mask1 + mask2)
             masks0.append(mask0)
             masks1.append(mask1)
             masks2.append(mask2)
-            if args.datadir == './data/nerf_synthetic/shape_tex':
+            if args.datadir == './data/nerf_synthetic/shape_tex' or \
+                args.datadir == './data/nerf_synthetic/shape_tex_v1' or\
+                args.datadir == './data/nerf_synthetic/clevr_c_d4':
                 images_full_train.append(images[i_train[k], ..., :3])
             elif args.datadir == './data/nerf_synthetic/clevr_c_d2':
                 images_full_train.append(images[k, ..., :3])
@@ -734,7 +815,7 @@ def train():
         images = images[..., :3]
         poses_train = poses[i_train]
 
-        # for t in range(13):
+        # for t in range(len(i_train)):
         #     plt.subplot(3, 1, 1)
         #     plt.imshow(masks0[t,...,None] * images_full_train[t])
         #     plt.subplot(3, 1, 2)
@@ -925,7 +1006,7 @@ def train():
                 coords = tf.reshape(coords, [-1, 2])
 
                 select_inds_full = np.random.choice(
-                    coords.shape[0], size=[512], replace=False)
+                    coords.shape[0], size=[256], replace=False)
                 select_inds_full = tf.gather_nd(coords, select_inds_full[:, tf.newaxis])
                 rays_o_full = tf.gather_nd(rays_o, select_inds_full)
                 rays_d_full = tf.gather_nd(rays_d, select_inds_full)
@@ -938,7 +1019,10 @@ def train():
                 masks_tmp = [masks0[img_i], masks1[img_i], masks2[img_i]]
                 for k in range(3):
 
-                    num_in, num_out = 256, 512
+                    if k == 0:
+                        num_in, num_out = 512, 128
+                    else:
+                        num_in, num_out = 256, 128
                     mask = masks_tmp[k]
                     coords1 = coords[mask[coords[:, 0], coords[:, 1]] > 0.5]
                     select_inds1 = np.random.choice(
@@ -974,23 +1058,34 @@ def train():
         with tf.GradientTape() as tape:
 
             # Make predictions for color, disparity, accumulated opacity.
-            # rgb,_,_,_, disp, acc,_,_,_, extras = render(
-            #     H, W, focal, chunk=args.chunk, rays=batch_rays_full,
-            #     verbose=i < 10, retraw=True, select_net=-1, **render_kwargs_train)
+            rgb,_,_,_, disp, acc,_,_,_, extras = render(
+                H, W, focal, chunk=args.chunk, rays=batch_rays_full,
+                verbose=i < 10, retraw=True, select_net=-1,
+                overlap_loss=False,
+                 **render_kwargs_train)
 
             # Compute MSE loss between predicted and true RGB.
-            # img_loss = img2mse(rgb, target_s_full)
-            # trans = extras['raw'][..., -1]
-            # loss = img_loss
-            # psnr = mse2psnr(img_loss)
+            img_loss = img2mse(rgb, target_s_full)
+            trans = extras['raw'][..., -1]
+            loss = img_loss
+            psnr = mse2psnr(img_loss)
             
-            loss = 0
-
             # Add MSE loss for coarse-grained model
-            # if 'rgb0' in extras:
-            #     img_loss0 = img2mse(extras['rgb0'], target_s_full)
-            #     loss += img_loss0
-            #     psnr0 = mse2psnr(img_loss0)
+            if 'rgb0' in extras:
+                img_loss0 = img2mse(extras['rgb0'], target_s_full)
+                loss += img_loss0
+                psnr0 = mse2psnr(img_loss0)
+            
+            # r0, r1, r2 = extras['raw0'], extras['raw1'], extras['raw2']
+            # rc0, rc1, rc2 = extras['raw0_c'], extras['raw1_c'], extras['raw2_c']
+            # densities = tf.stack([r0[..., 3:], r1[..., 3:], r2[..., 3:]]) # (3, N, N_s, 1)
+            # overlap_loss = tf.reduce_sum(tf.reduce_sum(densities, 0) - tf.reduce_max(densities,0))
+            # densities = tf.stack([rc0[..., 3:], rc1[..., 3:], rc2[..., 3:]]) # (3, N, N_s, 1)
+            # overlap_loss += tf.reduce_sum(tf.reduce_sum(densities, 0) - tf.reduce_max(densities,0))
+            # loss += overlap_loss * 0.001
+
+            # loss = 0
+
 
             for k, (batch_rays_i, batch_rays_out_i, target_s_i) in \
                  enumerate(zip(batch_rays_list, batch_rays_out_list, targets_list)):
@@ -1004,11 +1099,10 @@ def train():
                         verbose=i < 10, retraw=True, select_net=k, 
                         **render_kwargs_train)
 
-                loss += img2mse(rgb_in, target_s_i)
+                loss += img2mse(rgb_in, target_s_i) * 3
                 loss += img2mse(acc_out, tf.zeros_like(acc_out))
 
-                img_loss0 = img2mse(extras_in['rgb0'], target_s_i)
-                loss += img_loss0
+                loss += img2mse(extras_in['rgb0'], target_s_i) * 3
 
                 loss += img2mse(extras_out['acc0'], 
                         tf.zeros_like(extras_out['acc0']))
@@ -1100,6 +1194,15 @@ def train():
             depth = depth / 30.
 
             psnr = mse2psnr(img2mse(rgb, target))
+
+            # test: render trianing pose
+            img_i_t = np.random.choice(i_train)
+            pose = poses[img_i_t, :3, :4]
+
+            rgb_t, rgb0_t, rgb1_t, rgb2_t, _, _, _, _, _, _ = \
+                render(H, W, focal, chunk=args.chunk, c2w=pose, select_net=-1,
+                                            **render_kwargs_test)
+
             
             # Save out the validation image for Tensorboard-free monitoring
             testimgdir = os.path.join(basedir, expname, 'tboard_val_imgs')
@@ -1113,6 +1216,10 @@ def train():
             imageio.imwrite(os.path.join(testimgdir, '{:06d}_acc1.png'.format(i)), to8b(acc1))
             imageio.imwrite(os.path.join(testimgdir, '{:06d}_acc2.png'.format(i)), to8b(acc2))
             imageio.imwrite(os.path.join(testimgdir, '{:06d}_depth.png'.format(i)), to8b(depth))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_t.png'.format(i)), to8b(rgb_t))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_t_s0.png'.format(i)), to8b(rgb0_t))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_t_s1.png'.format(i)), to8b(rgb1_t))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_t_s2.png'.format(i)), to8b(rgb2_t))
 
             with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
 
@@ -1139,5 +1246,5 @@ def train():
 
 
 if __name__ == '__main__':
-    os.environ['CUDA_VISIBLE_DEVICES']='7'
+    os.environ['CUDA_VISIBLE_DEVICES']='6'
     train()
