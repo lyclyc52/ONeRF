@@ -1,10 +1,10 @@
 from object_segmentation_helper import *
 os.environ['CUDA_VISIBLE_DEVICES'] = '8'
 
-base_dir = './results/testing_10'
+base_dir = './results/testing_3'
 
 
-datadir = 'data/nerf_synthetic/clevr_c_d2'
+datadir = 'data/nerf_synthetic/clevr_bg6'
 
 
 input_size = 400
@@ -41,8 +41,9 @@ device = torch.device("cuda:0" )
 
 # val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60] #for  clevrtex
 
-# val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
-val = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
+# val = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+# val = [0,1,2, 9,10,11,12,13,14,16,17,24,25,27,28]
 print(val)
 
 
@@ -104,7 +105,7 @@ with torch.no_grad():
 
         im = to8b(attn[b][1])
         dilation = ndimage.binary_dilation(im)
-        dilation = ndimage.binary_dilation(dilation, iterations=3)
+        dilation = ndimage.binary_dilation(dilation, iterations=1)
         # erode = ndimage.binary_erosion(dilation, iterations=1)
 
         origin = images[val[b]]

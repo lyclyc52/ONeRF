@@ -1,6 +1,6 @@
-expname = clevr_test
+expname = clevrtex_bg2_test
 basedir = ./logs
-datadir = ./data/nerf_synthetic/clevrtex
+datadir = ./data/nerf_synthetic/clevrtex_bg2
 dataset_type = blender
 
 half_res = True

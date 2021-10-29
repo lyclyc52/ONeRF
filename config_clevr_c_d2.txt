@@ -1,6 +1,6 @@
-expname = clevr_1_test
-basedir = ./logs
-datadir = ./data/nerf_synthetic/clevr_1
+expname = test_c_d3
+basedir = logs
+datadir = ./data/nerf_synthetic/clevr_c_d4
 dataset_type = blender
 
 half_res = True
@@ -11,5 +11,8 @@ N_importance = 64
 
 use_viewdirs = True
 
-white_bkgd = False
+
 N_rand = 1024
+
+
+white_bkgd = False

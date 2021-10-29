@@ -12,7 +12,7 @@ from run_nerf_helpers import *
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
 from load_blender import load_blender_data
-
+import matplotlib.pyplot as plt
 
 tf.compat.v1.enable_eager_execution()
 
@@ -56,7 +56,8 @@ def render_rays(ray_batch,
                 network_fine=None,
                 white_bkgd=False,
                 raw_noise_std=0.,
-                verbose=False):
+                verbose=False,
+                select_net=-1):
     """Volumetric rendering.
 
     Args:
@@ -203,9 +204,25 @@ def render_rays(ray_batch,
         z_vals[..., :, None]  # [N_rays, N_samples, 3]
 
     # Evaluate model at each point.
-    raw = network_query_fn(pts, viewdirs, network_fn)  # [N_rays, N_samples, 4]
-    rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
-        raw, z_vals, rays_d)
+    if select_net == -1:
+        raw0 = network_query_fn(pts, viewdirs, network_fn[0])  # [N_rays, N_samples, 4]
+        raw1 = network_query_fn(pts, viewdirs, network_fn[1])
+        raw2 = network_query_fn(pts, viewdirs, network_fn[2])
+        raw = raw0 + raw1 + raw2
+
+        rgb_map_s0, _, _, _, _ = raw2outputs(
+            raw0, z_vals, rays_d)
+        rgb_map_s1, _, _, _, _ = raw2outputs(
+            raw1, z_vals, rays_d)
+        rgb_map_s2, _, _, _, _ = raw2outputs(
+            raw2, z_vals, rays_d)
+        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
+            raw, z_vals, rays_d)
+        
+    else:
+        raw = network_query_fn(pts, viewdirs, network_fn[select_net])
+        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
+            raw, z_vals, rays_d)
 
     if N_importance > 0:
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
@@ -224,11 +241,36 @@ def render_rays(ray_batch,
 
         # Make predictions with network_fine.
         run_fn = network_fn if network_fine is None else network_fine
-        raw = network_query_fn(pts, viewdirs, run_fn)
-        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
-            raw, z_vals, rays_d)
 
-    ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map}
+        if select_net == -1:
+
+            raw0 = network_query_fn(pts, viewdirs, run_fn[0])  # [N_rays, N_samples, 4]
+            raw1 = network_query_fn(pts, viewdirs, run_fn[1])
+            raw2 = network_query_fn(pts, viewdirs, run_fn[2])
+            raw = raw0 + raw1 + raw2
+
+            rgb_map_s0, _, acc_map_s0, _, _ = raw2outputs(
+                raw0, z_vals, rays_d)
+            rgb_map_s1, _, acc_map_s1, _, _ = raw2outputs(
+                raw1, z_vals, rays_d)
+            rgb_map_s2, _, acc_map_s2, _, _ = raw2outputs(
+                raw2, z_vals, rays_d)
+
+            rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
+                raw, z_vals, rays_d)
+        else:
+            raw = network_query_fn(pts, viewdirs, run_fn[select_net])
+            rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
+                raw, z_vals, rays_d)
+
+    if select_net == -1:
+        ret = {'rgb_map': rgb_map, 'rgb_s0': rgb_map_s0, 'rgb_s1': rgb_map_s1,
+                    'rgb_s2': rgb_map_s2,
+                    'disp_map': disp_map, 'acc_map': acc_map, 
+                    'acc_s0': acc_map_s0, 'acc_s1': acc_map_s1, 'acc_s2': acc_map_s2}
+    else:
+        ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map}
+
     if retraw:
         ret['raw'] = raw
     if N_importance > 0:
@@ -243,11 +285,11 @@ def render_rays(ray_batch,
     return ret
 
 
-def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
+def batchify_rays(rays_flat, chunk=1024*32, select_net=-1, **kwargs):
     """Render rays in smaller minibatches to avoid OOM."""
     all_ret = {}
     for i in range(0, rays_flat.shape[0], chunk):
-        ret = render_rays(rays_flat[i:i+chunk], **kwargs)
+        ret = render_rays(rays_flat[i:i+chunk], select_net=select_net, **kwargs)
         for k in ret:
             if k not in all_ret:
                 all_ret[k] = []
@@ -261,6 +303,7 @@ def render(H, W, focal,
            chunk=1024*32, rays=None, c2w=None, ndc=True,
            near=0., far=1.,
            use_viewdirs=False, c2w_staticcam=None,
+           select_net = -1,
            **kwargs):
     """Render rays
 
@@ -279,6 +322,7 @@ def render(H, W, focal,
       use_viewdirs: bool. If True, use viewing direction of a point in space in model.
       c2w_staticcam: array of shape [3, 4]. If not None, use this transformation matrix for 
        camera while using other c2w argument for viewing directions.
+      select_net: -1 for all
 
     Returns:
       rgb_map: [batch_size, 3]. Predicted RGB values for rays.
@@ -328,12 +372,16 @@ def render(H, W, focal,
         rays = tf.concat([rays, viewdirs], axis=-1)
 
     # Render and reshape
-    all_ret = batchify_rays(rays, chunk, **kwargs)
+    all_ret = batchify_rays(rays, chunk, select_net, **kwargs)
     for k in all_ret:
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
         all_ret[k] = tf.reshape(all_ret[k], k_sh)
 
-    k_extract = ['rgb_map', 'disp_map', 'acc_map']
+    if select_net == -1:
+        k_extract = ['rgb_map', 'rgb_s0', 'rgb_s1', 'rgb_s2', 'disp_map', 'acc_map',
+            'acc_s0', 'acc_s1', 'acc_s2']
+    else:
+        k_extract = ['rgb_map', 'disp_map', 'acc_map']
     ret_list = [all_ret[k] for k in k_extract]
     ret_dict = {k: all_ret[k] for k in all_ret if k not in k_extract}
     return ret_list + [ret_dict]
@@ -390,21 +438,32 @@ def create_nerf(args):
             args.multires_views, args.i_embed)
     output_ch = 4
     skips = [4]
-    model = init_nerf_model(
-        D=args.netdepth, W=args.netwidth,
-        input_ch=input_ch, output_ch=output_ch, skips=skips,
-        input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
-    grad_vars = model.trainable_variables
-    models = {'model': model}
+    models_c = []
+    for i in range(3):
+        model = init_nerf_model(
+            D=args.netdepth, W=args.netwidth,
+            input_ch=input_ch, output_ch=output_ch, skips=skips,
+            input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+        if i == 0:
+            grad_vars = model.trainable_variables
+        else:
+            grad_vars += model.trainable_variables
+        models_c.append(model)
+    models = {'model_coarse': models_c}
+    model_coarse = models_c
 
     model_fine = None
     if args.N_importance > 0:
-        model_fine = init_nerf_model(
-            D=args.netdepth_fine, W=args.netwidth_fine,
-            input_ch=input_ch, output_ch=output_ch, skips=skips,
-            input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
-        grad_vars += model_fine.trainable_variables
-        models['model_fine'] = model_fine
+        models_f = []
+        for i in range(3):
+            model_fine = init_nerf_model(
+                D=args.netdepth_fine, W=args.netwidth_fine,
+                input_ch=input_ch, output_ch=output_ch, skips=skips,
+                input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+            grad_vars += model_fine.trainable_variables
+            models_f.append(model_fine)
+        models['model_fine'] = models_f
+        model_fine = models_f
 
     def network_query_fn(inputs, viewdirs, network_fn): return run_network(
         inputs, viewdirs, network_fn,
@@ -418,7 +477,7 @@ def create_nerf(args):
         'N_importance': args.N_importance,
         'network_fine': model_fine,
         'N_samples': args.N_samples,
-        'network_fn': model,
+        'network_fn': model_coarse,
         'use_viewdirs': args.use_viewdirs,
         'white_bkgd': args.white_bkgd,
         'raw_noise_std': args.raw_noise_std,
@@ -617,18 +676,80 @@ def train():
 
     elif args.dataset_type == 'blender':
         images, poses, render_poses, hwf, i_split = load_blender_data(
-            args.datadir, args.half_res, args.testskip, size = 400)
+            args.datadir, args.half_res, args.testskip, size = 128)
         print('Loaded blender', images.shape,
               render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
-        near = 1.
-        far = 20.
+        # for clevr tex testing
+        if args.datadir == './data/nerf_synthetic/shape_tex':
+            mask_prefix = 'data/nerf_synthetic/shape_tex/masks/val_000950_r_'
+            near = 0.1
+            far = 6.
+            i_train = [4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
+            i_val = i_test = [3, 22, 25, 32, 39, 44]
+        elif args.datadir == './data/nerf_synthetic/clevr_c_d2':
+            mask_prefix = 'data/nerf_synthetic/clevr_c_d2/masks/val_000200_r_'
+            near = 0.1
+            far = 20.
+            i_train = list(range(15))
+            i_val = i_test = [4, 8]
+            for t in i_val:
+                i_train.remove(t)
+        
+        images_full_train = []
+        masks0, masks1, masks2 = [], [], []
+        H,W,_ = hwf
+        for k in range(15):
+            if args.datadir == './data/nerf_synthetic/shape_tex':
+                mask1 = imageio.imread(mask_prefix+f'{k}_slot0.jpg')
+                mask1 = (mask1 > 128).astype(np.float32)
+                mask2 = imageio.imread(mask_prefix+f'{k}_slot1.jpg')
+                mask2 = (mask2 > 128).astype(np.float32)
+            elif args.datadir == './data/nerf_synthetic/clevr_c_d2':
+                if k in i_val:
+                    continue
+                mask1 = imageio.imread(mask_prefix+f'{k}_slot1.png')
+                mask1 = (mask1 > 128).astype(np.float32)
+                mask2 = imageio.imread(mask_prefix+f'{k}_slot3.png')
+                mask2 = (mask2 > 128).astype(np.float32)
+            
+            mask0 = 1. - (mask1 + mask2)
+            masks0.append(mask0)
+            masks1.append(mask1)
+            masks2.append(mask2)
+            if args.datadir == './data/nerf_synthetic/shape_tex':
+                images_full_train.append(images[i_train[k], ..., :3])
+            elif args.datadir == './data/nerf_synthetic/clevr_c_d2':
+                images_full_train.append(images[k, ..., :3])
 
-        if args.white_bkgd:
-            images = images[..., :3]*images[..., -1:] + (1.-images[..., -1:])
-        else:
-            images = images[..., :3]
+        images_full_train = np.array(images_full_train)
+        masks0, masks1, masks2 = np.array(masks0), np.array(masks1), np.array(masks2)
+        masks0 = tf.compat.v1.image.resize_area(masks0[...,None], [H, W]).numpy()
+        masks1 = tf.compat.v1.image.resize_area(masks1[...,None], [H, W]).numpy()
+        masks2 = tf.compat.v1.image.resize_area(masks2[...,None], [H, W]).numpy()
+        masks0, masks1, masks2 = masks0.squeeze(-1), masks1.squeeze(-1), \
+            masks2.squeeze(-1)
+
+        images = images[..., :3]
+        poses_train = poses[i_train]
+
+        # for t in range(13):
+        #     plt.subplot(3, 1, 1)
+        #     plt.imshow(masks0[t,...,None] * images_full_train[t])
+        #     plt.subplot(3, 1, 2)
+        #     plt.imshow(masks1[t,...,None] * images_full_train[t])
+        #     plt.subplot(3, 1, 3)
+        #     plt.imshow(masks2[t,...,None] * images_full_train[t])
+        #     plt.show()
+        # exit()
+
+
+
+        # if args.white_bkgd:
+        #     images = images[..., :3]*images[..., -1:] + (1.-images[..., -1:])
+        # else:
+        #     images = images[..., :3]
 
     elif args.dataset_type == 'deepvoxels':
 
@@ -751,39 +872,9 @@ def train():
     # i_train = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
     # 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
 
-    # i_test = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
-    # 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
 
-    # i_val = [0, 2, 3, 4, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, \
-    # 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
-
-    # i_train = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
-    # i_test = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
-    # i_val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58]
-
-    # i_train = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60]
-    # i_test = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60]
-    # i_val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60]
-
-    # i_train = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
-    # i_test = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
-    # i_val = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
-
-    i_train = [0,1,2, 9,10,11,12,13,14,16,17,24,25,27,28,30]
-    i_test = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
-    i_val = [15,26,29,]
-
-    # mask_dir = 'results/testing_8/segmentation'
-    # slot = []
-    # for i in range(15):
-    #     image_file = os.path.join(mask_dir, 'val_000950_r_{:d}_slot0.jpg'.format(i))
-    #     slot.append(imageio.imread(image_file))
-    # slot = np.stack(slot, 0)
-    # slot = slot / 255.
-
-    
-    # images[i_train] = images[i_train] * slot[..., None] + (1. - slot[..., None])
-
+    i_test = i_train
+    i_val = i_train
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
@@ -816,8 +907,9 @@ def train():
         else:
             # Random from one image
             img_i = np.random.choice(i_train)
-            target = images[img_i]
-            pose = poses[img_i, :3, :4]
+            img_i = i_train.index(img_i)
+            target_full = images_full_train[img_i]
+            pose = poses_train[img_i, :3, :4]
 
             if N_rand is not None:
                 rays_o, rays_d = get_rays(H, W, focal, pose)
@@ -834,35 +926,95 @@ def train():
                     coords = tf.stack(tf.meshgrid(
                         tf.range(H), tf.range(W), indexing='ij'), -1)
                 coords = tf.reshape(coords, [-1, 2])
-                select_inds = np.random.choice(
-                    coords.shape[0], size=[N_rand], replace=False)
-                select_inds = tf.gather_nd(coords, select_inds[:, tf.newaxis])
 
-                rays_o = tf.gather_nd(rays_o, select_inds)
-                rays_d = tf.gather_nd(rays_d, select_inds)
-                batch_rays = tf.stack([rays_o, rays_d], 0)
-                target_s = tf.gather_nd(target, select_inds)
+                select_inds_full = np.random.choice(
+                    coords.shape[0], size=[512], replace=False)
+                select_inds_full = tf.gather_nd(coords, select_inds_full[:, tf.newaxis])
+                rays_o_full = tf.gather_nd(rays_o, select_inds_full)
+                rays_d_full = tf.gather_nd(rays_d, select_inds_full)
+                batch_rays_full = tf.stack([rays_o_full, rays_d_full], 0)
+                target_s_full = tf.gather_nd(target_full, select_inds_full)
+
+                batch_rays_list = []
+                batch_rays_out_list = []
+                targets_list = []
+                masks_tmp = [masks0[img_i], masks1[img_i], masks2[img_i]]
+                for k in range(3):
+
+                    num_in, num_out = 256, 512
+                    mask = masks_tmp[k]
+                    coords1 = coords[mask[coords[:, 0], coords[:, 1]] > 0.5]
+                    select_inds1 = np.random.choice(
+                                coords1.shape[0], size=[num_in], replace=False)
+                    coords1_s = tf.gather_nd(coords1, select_inds1[:, tf.newaxis])
+                    rays_o1 = tf.gather_nd(rays_o, coords1_s)
+                    rays_d1 = tf.gather_nd(rays_d, coords1_s)
+                    batch_rays1 = tf.stack([rays_o1, rays_d1], 0)
+                    target_s1 = tf.gather_nd(target_full, coords1_s)
+
+                    coords1_out = coords[mask[coords[:, 0], coords[:, 1]] <= 0.5]
+                    select_inds1_out = np.random.choice(
+                            coords1_out.shape[0], size=[num_out], replace=False)
+                    coords1_out_s = tf.gather_nd(coords1_out, select_inds1_out[:, tf.newaxis])
+                    rays_o1_out = tf.gather_nd(rays_o, coords1_out_s)
+                    rays_d1_out = tf.gather_nd(rays_d, coords1_out_s)
+                    batch_rays1_out = tf.stack([rays_o1_out, rays_d1_out], 0)
+
+                    batch_rays_list.append(batch_rays1)
+                    batch_rays_out_list.append(batch_rays1_out)
+                    targets_list.append(target_s1)
+
+                
+                # target_s0 = tf.gather_nd(images0[img_i], select_inds)
+                # target_s1 = tf.gather_nd(images1[img_i], select_inds)
+                # target_s2 = tf.gather_nd(images2[img_i], select_inds)
+                # acc_tar_s0 = tf.gather_nd(masks0[img_i], select_inds)
+                # acc_tar_s1 = tf.gather_nd(masks1[img_i], select_inds)
+                # acc_tar_s2 = tf.gather_nd(masks2[img_i], select_inds)
 
         #####  Core optimization loop  #####
 
         with tf.GradientTape() as tape:
 
             # Make predictions for color, disparity, accumulated opacity.
-            rgb, disp, acc, extras = render(
-                H, W, focal, chunk=args.chunk, rays=batch_rays,
-                verbose=i < 10, retraw=True, **render_kwargs_train)
+            # rgb,_,_,_, disp, acc,_,_,_, extras = render(
+            #     H, W, focal, chunk=args.chunk, rays=batch_rays_full,
+            #     verbose=i < 10, retraw=True, select_net=-1, **render_kwargs_train)
 
             # Compute MSE loss between predicted and true RGB.
-            img_loss = img2mse(rgb, target_s)
-            trans = extras['raw'][..., -1]
-            loss = img_loss 
-            psnr = mse2psnr(img_loss)
+            # img_loss = img2mse(rgb, target_s_full)
+            # trans = extras['raw'][..., -1]
+            # loss = img_loss
+            # psnr = mse2psnr(img_loss)
+            
+            loss = 0
 
             # Add MSE loss for coarse-grained model
-            if 'rgb0' in extras:
-                img_loss0 = img2mse(extras['rgb0'], target_s)
+            # if 'rgb0' in extras:
+            #     img_loss0 = img2mse(extras['rgb0'], target_s_full)
+            #     loss += img_loss0
+            #     psnr0 = mse2psnr(img_loss0)
+
+            for k, (batch_rays_i, batch_rays_out_i, target_s_i) in \
+                 enumerate(zip(batch_rays_list, batch_rays_out_list, targets_list)):
+                rgb_in, _, _, extras_in = render(
+                    H, W, focal, chunk=args.chunk, rays=batch_rays_i,
+                    verbose=i < 10, retraw=True, select_net=k, 
+                    **render_kwargs_train)
+
+                _, _, acc_out, extras_out = render(
+                        H, W, focal, chunk=args.chunk, rays=batch_rays_out_i,
+                        verbose=i < 10, retraw=True, select_net=k, 
+                        **render_kwargs_train)
+
+                loss += img2mse(rgb_in, target_s_i)
+                loss += img2mse(acc_out, tf.zeros_like(acc_out))
+
+                img_loss0 = img2mse(extras_in['rgb0'], target_s_i)
                 loss += img_loss0
-                psnr0 = mse2psnr(img_loss0)
+
+                loss += img2mse(extras_out['acc0'], 
+                        tf.zeros_like(extras_out['acc0']))
 
         gradients = tape.gradient(loss, grad_vars)
         optimizer.apply_gradients(zip(gradients, grad_vars))
@@ -881,7 +1033,13 @@ def train():
 
         if i % args.i_weights == 0:
             for k in models:
-                save_weights(models[k], k, i)
+                t = 0
+                if k == 'optimizer':
+                    save_weights(model, k, i)
+                else:
+                    for model in models[k]:
+                        save_weights(model, k+'_{}'.format(t), i)
+                        t+=1
 
         if i % args.i_video == 0 and i > 0:
 
@@ -914,14 +1072,15 @@ def train():
 
         if i % args.i_print == 0 or i < 10:
 
-            print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
+            # print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
+            print(expname, i, loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))
-            with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_print):
-                tf.contrib.summary.scalar('loss', loss)
-                tf.contrib.summary.scalar('psnr', psnr)
-                tf.contrib.summary.histogram('tran', trans)
-                if args.N_importance > 0:
-                    tf.contrib.summary.scalar('psnr0', psnr0)
+            # with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_print):
+            #     tf.contrib.summary.scalar('loss', loss)
+            #     tf.contrib.summary.scalar('psnr', psnr)
+            #     tf.contrib.summary.histogram('tran', trans)
+            #     if args.N_importance > 0:
+            #         tf.contrib.summary.scalar('psnr0', psnr0)
 
         if i % args.i_img == 0:
             print("Save image")
@@ -930,12 +1089,18 @@ def train():
             target = images[img_i]
             pose = poses[img_i, :3, :4]
 
-            rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, c2w=pose,
+            rgb, rgb0, rgb1, rgb2, disp, acc, acc0, acc1, acc2, extras = \
+                render(H, W, focal, chunk=args.chunk, c2w=pose, select_net=-1,
                                             **render_kwargs_test)
+            # rgb1, disp, acc1, extras = render(H, W, focal, chunk=args.chunk, 
+            #                                 c2w=pose, select_net=2,
+            #                                 **render_kwargs_test)
+            # rgb = rgb1
+            # acc = acc1
 
             depth = 1/disp
 
-            depth = depth /30.
+            depth = depth / 30.
 
             psnr = mse2psnr(img2mse(rgb, target))
             
@@ -944,8 +1109,20 @@ def train():
             if i==0:
                 os.makedirs(testimgdir, exist_ok=True)
             imageio.imwrite(os.path.join(testimgdir, '{:06d}.png'.format(i)), to8b(rgb))
-            # imageio.imwrite(os.path.join(testimgdir, '{:06d}_depth.png'.format(i)), to8b(depth))
-            imageio.imwrite(os.path.join(testimgdir, '{:06d}_gt.png'.format(i)), to8b(target))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_s0.png'.format(i)), to8b(rgb0))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_s1.png'.format(i)), to8b(rgb1))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_s2.png'.format(i)), to8b(rgb2))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_acc0.png'.format(i)), to8b(acc0))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_acc1.png'.format(i)), to8b(acc1))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_acc2.png'.format(i)), to8b(acc2))
+            imageio.imwrite(os.path.join(testimgdir, '{:06d}_depth.png'.format(i)), to8b(depth))
+
+
+
+            # imageio.imwrite(os.path.join(testimgdir, '{:06d}_s0_origin.png'.format(i)), to8b(target * masks0[img_i][...,None]))
+            # imageio.imwrite(os.path.join(testimgdir, '{:06d}_s1_origin.png'.format(i)), to8b(target * masks1[img_i][...,None]))
+            # imageio.imwrite(os.path.join(testimgdir, '{:06d}_s2_origin.png'.format(i)), to8b(target * masks2[img_i][...,None]))
+
             with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
 
                 tf.contrib.summary.image('rgb', to8b(rgb)[tf.newaxis])
@@ -971,5 +1148,5 @@ def train():
 
 
 if __name__ == '__main__':
-    os.environ['CUDA_VISIBLE_DEVICES']='5,6'
+    os.environ['CUDA_VISIBLE_DEVICES']='6,7'
     train()

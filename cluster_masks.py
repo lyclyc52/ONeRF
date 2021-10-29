@@ -74,24 +74,24 @@ class SobelOperator(nn.Module):
 os.environ["CUDA_VISIBLE_DEVICES"]='8'
 
 
-num_slots = 6
+num_slots = 4
 masks = []
 for i in range(15):
-    image_dir = 'results/testing_7/mask_refine/seg_input{:d}.png'.format(i)
+    image_dir = 'results/testing_2/mask_refine/seg_input{:d}.png'.format(i)
     image = imageio.imread(image_dir)
     image_mask = []
     for j in range(num_slots):
-        mask_dir= 'results/testing_7/segmentation/val_000950_r_{:d}_slot{:d}.jpg'.format(i,j)
+        mask_dir= 'results/testing_2/segmentation/val_000200_r_{:d}_slot{:d}.png'.format(i,j)
 
         im = imageio.imread(mask_dir)
 
-        # 
+        erode = ndimage.binary_erosion(im, iterations=1)
         # dilation = dilation.astype(np.uint8)
 
         image_mask.append(erode)
 
 
-        imageio.imwrite('results/testing_7/remove_noise/r_{:d}_slot{:d}.jpg'.format(i,j), erode[...,None] * image)
+        imageio.imwrite('results/testing_2/remove_noise/r_{:d}_slot{:d}.png'.format(i,j), erode[...,None] * image)
 
     masks.append(image_mask)
     # image_dir = 'results/testing_11/mask_refine/input{:d}.png'.format(i)
@@ -108,27 +108,28 @@ masks = np.transpose(masks, [0,2,3,1])
 
 device = torch.device("cuda:0" )
 
-datadir = 'data/nerf_synthetic/clevrtex'
+datadir = 'data/nerf_synthetic/clevr_c_d4'
 images, poses, depth_maps, render_poses, hwf, i_split = load_data(
             datadir, True, 1, size = input_size)
 
 
 
-
-model = MyNet( 3, num_slot=10 )
-model.load_state_dict(torch.load('./results/testing_3/model'))
+model_slot = 8
+model = MyNet( 3, num_slot=model_slot )
+model.load_state_dict(torch.load('./results/testing_2/model'))
 model.to(device)
 
-N_imgs=70
-images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
+images = images[...,:3]
+# N_imgs=70
+# images, depth_maps, poses = images[:N_imgs, :, :, :3], depth_maps[:N_imgs], poses[:N_imgs]
 images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_maps), torch.from_numpy(poses)
 
 
 # val = [0, 2, 3, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 45, 46, 48] #for simple clevr
 
-val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60] #for  clevrtex
+# val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60] #for  clevrtex
 
-
+val = [0,1,2, 9,10,11,12,13,14,16,17,24,25,27,28]
 
 
 val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
@@ -139,7 +140,7 @@ masks = masks.to(device)
 
 val_images = val_images.permute([0,3,1,2])
 output = model( val_images )
-output = output.permute([0,2,3,1]).reshape( [-1, 10] )
+output = output.permute([0,2,3,1]).reshape( [-1, model_slot] )
 
 cur_m1 = masks[..., 0]
 cur_m1 = cur_m1.reshape(-1)
@@ -180,9 +181,9 @@ for i in range(5):
         c_class = a[j]
         c_class =c_class[index]
         t.append(c_class.mean(dim=0))
+    print(torch.norm(t[0]-t[1]))
+    print(torch.norm(t[0]-t[2]))
     print(torch.norm(t[0]-t[3]))
-    print(torch.norm(t[1]-t[3]))
-    print(torch.norm(t[2]-t[3]))
     print('sample')
 exit()
 # f_extractor = Encoder_VGG(hwf, device=device)

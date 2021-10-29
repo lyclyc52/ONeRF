@@ -94,9 +94,9 @@ class SobelOperator(nn.Module):
 
 # def main():
 
-img_dir = './results/testing_10/segmentation'
-basedir = './results/testing_10/mask_refine'
-model_path = './results/testing_10/model'
+img_dir = './results/testing_2/segmentation'
+basedir = './results/testing_2/mask_refine'
+model_path = './results/testing_2/model'
 
 
 os.makedirs(img_dir, exist_ok=True)
