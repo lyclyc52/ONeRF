@@ -1,10 +1,10 @@
 from object_segmentation_helper import *
-os.environ['CUDA_VISIBLE_DEVICES'] = '8'
+os.environ['CUDA_VISIBLE_DEVICES'] = '6'
 
-base_dir = './results/testing_3'
+base_dir = './results/testing_clevrtex_room'
 
 
-datadir = 'data/nerf_synthetic/clevr_bg6'
+datadir = 'data/nerf_synthetic/clevrtex_room'
 
 
 input_size = 400
@@ -39,9 +39,9 @@ device = torch.device("cuda:0" )
 
 
 
-# val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60] #for  clevrtex
+val = [7,8,9, 15,16, 22,23, 31, 32, 37, 38, 46,47, 48, 53] #for  clevrtex
 
-val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
+# val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
 # val = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 # val = [0,1,2, 9,10,11,12,13,14,16,17,24,25,27,28]
 print(val)
@@ -51,15 +51,16 @@ val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
 
 
 
-
 cluster_size = 100
-cluster_images = tf.compat.v1.image.resize_area(val_images, [cluster_size, cluster_size]).numpy()
-cluster_depth = tf.compat.v1.image.resize_area(val_depths[...,None], [cluster_size, cluster_size]).numpy()
+cluster_images = tf.compat.v1.image.resize(val_images, [cluster_size, cluster_size], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR).numpy()
+cluster_depth = tf.compat.v1.image.resize(val_depths[...,None], [cluster_size, cluster_size], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR).numpy()
+
+
+
 cluster_depth = cluster_depth[...,0]
 
 
 cluster_images, cluster_depth, val_poses = torch.from_numpy(cluster_images), torch.from_numpy(cluster_depth), torch.from_numpy(val_poses)
-
 
 
 H,W,focal = hwf
@@ -83,7 +84,7 @@ with torch.no_grad():
     f_p = f[...,C-3:]
     f = f[...,:C-3]
 
-    w = .5
+    w = 2.
 
     attn_logits = KM_clustering(f, f_p, w, device)
     attn = attn_logits.softmax(dim=-1)
@@ -105,7 +106,7 @@ with torch.no_grad():
 
         im = to8b(attn[b][1])
         dilation = ndimage.binary_dilation(im)
-        dilation = ndimage.binary_dilation(dilation, iterations=1)
+        dilation = ndimage.binary_dilation(dilation, iterations=5)
         # erode = ndimage.binary_erosion(dilation, iterations=1)
 
         origin = images[val[b]]

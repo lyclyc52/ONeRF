@@ -779,7 +779,7 @@ def train():
             near = 0.1
             far = 20.
             i_train = [0,1,2,9,10,11,12,13,14,16,17,24,25,27,28]
-            i_val = i_test = [5, 22, 26, 32, 39, 44]
+            i_val = i_test = [5, 22, 26, ]
 
 
         
@@ -1045,6 +1045,8 @@ def train():
                     else:
                         num_in, num_out = 256, 128
                     mask = masks_tmp[k]
+                    print(mask.shape)
+                    exit()
                     coords1 = coords[mask[coords[:, 0], coords[:, 1]] > 0.5]
                     select_inds1 = np.random.choice(
                                 coords1.shape[0], size=[num_in], replace=True)
@@ -1080,23 +1082,26 @@ def train():
 
             # Make predictions for color, disparity, accumulated opacity.
 
-            rgb,_,_,_, disp, acc,_,_,_, extras = render(
-                H, W, focal, chunk=args.chunk, rays=batch_rays_full,
-                verbose=i < 10, retraw=True, select_net=-1,
-                overlap_loss=False,
-                 **render_kwargs_train)
 
-            # Compute MSE loss between predicted and true RGB.
-            img_loss = img2mse(rgb, target_s_full)
-            trans = extras['raw'][..., -1]
-            loss = img_loss
-            psnr = mse2psnr(img_loss)
+            loss = 0
+
+            # rgb,_,_,_, disp, acc,_,_,_, extras = render(
+            #     H, W, focal, chunk=args.chunk, rays=batch_rays_full,
+            #     verbose=i < 10, retraw=True, select_net=-1,
+            #     overlap_loss=False,
+            #      **render_kwargs_train)
+
+            # # Compute MSE loss between predicted and true RGB.
+            # img_loss = img2mse(rgb, target_s_full)
+            # trans = extras['raw'][..., -1]
+            # loss = img_loss
+            # psnr = mse2psnr(img_loss)
             
-            # Add MSE loss for coarse-grained model
-            if 'rgb0' in extras:
-                img_loss0 = img2mse(extras['rgb0'], target_s_full)
-                loss += img_loss0
-                psnr0 = mse2psnr(img_loss0)
+            # # Add MSE loss for coarse-grained model
+            # if 'rgb0' in extras:
+            #     img_loss0 = img2mse(extras['rgb0'], target_s_full)
+            #     loss += img_loss0
+            #     psnr0 = mse2psnr(img_loss0)
             
             # r0, r1, r2 = extras['raw0'], extras['raw1'], extras['raw2']
             # rc0, rc1, rc2 = extras['raw0_c'], extras['raw1_c'], extras['raw2_c']
@@ -1111,6 +1116,10 @@ def train():
 
             for k, (batch_rays_i, batch_rays_out_i, target_s_i) in \
                  enumerate(zip(batch_rays_list, batch_rays_out_list, targets_list)):
+                 if k != 2:
+                     continue
+
+
                 rgb_in, _, _, extras_in = render(
                     H, W, focal, chunk=args.chunk, rays=batch_rays_i,
                     verbose=i < 10, retraw=True, select_net=k, 
@@ -1269,5 +1278,5 @@ def train():
 
 
 if __name__ == '__main__':
-    os.environ['CUDA_VISIBLE_DEVICES']='6'
+    os.environ['CUDA_VISIBLE_DEVICES']='5,6'
     train()

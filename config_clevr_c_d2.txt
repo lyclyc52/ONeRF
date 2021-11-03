@@ -1,12 +1,7 @@
-<<<<<<< HEAD
-expname = test_c_d3
+expname = test_c_d5
 basedir = logs
 datadir = ./data/nerf_synthetic/clevr_c_d4
-=======
-expname = test_c_d
-basedir = /data/sliangal/test_multi_nerf/logs
-datadir = ./data/nerf_synthetic/clevr_c_d2
->>>>>>> 381e58f544f42acb440de7260e5b9c7882d464bd
+
 dataset_type = blender
 
 half_res = True
@@ -18,11 +13,5 @@ N_importance = 64
 use_viewdirs = True
 
 
-<<<<<<< HEAD
-N_rand = 1024
 
-
-white_bkgd = False
-=======
 N_rand = 1024
->>>>>>> 381e58f544f42acb440de7260e5b9c7882d464bd

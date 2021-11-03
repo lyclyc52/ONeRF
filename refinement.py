@@ -4,27 +4,24 @@ from object_segmentation_helper import *
 
 
 
-def _l2norm(inp, dim):
-    '''Normlize the inp tensor with l2-norm.
-    Returns a tensor where each sub-tensor of input along the given dim is 
-    normalized such that the 2-norm of the sub-tensor is equal to 1.
-    Arguments:
-        inp (tensor): The input tensor.
-        dim (int): The dimension to slice over to get the ssub-tensors.
-    Returns:
-        (tensor) The normalized tensor.
-    '''
-    return inp / (1e-6 + inp.norm(dim=dim, keepdim=True))
 
-base_dir =  'results/testing_8'
-datadir = 'data/nerf_synthetic/clevr_bg6'
+
+base_dir = './results/testing_clevrtex_room'
+datadir = 'data/nerf_synthetic/clevrtex_room'
 image_dir = os.path.join(base_dir, 'segmentation')
+nerf_dir = os.path.join(base_dir, 'nerf_mask')
+model_dir = os.path.join(base_dir, 'model')
+use_nerf = False
+val = [8,9, 23, 24, 28,29, 31, 32, 37, 42, 43, 46, 48, 53,54]
+
+
 
 masks = []
-for j in range(2):
+slot_n = [0,1,5]
+for j in slot_n:
     slot = []
     for i in range(15):
-        image_file = os.path.join(image_dir, 'val_000950_r_{:d}_slot{:d}.jpg'.format(i,j))
+        image_file = os.path.join(image_dir, 'val_000200_r_{:d}_slot{:d}.png'.format(i,j))
         slot.append(imageio.imread(image_file))
     slot = np.stack(slot, 0)
     masks.append(slot)
@@ -34,22 +31,25 @@ masks = masks / 255.
 
 images, poses, depth_maps, render_poses, hwf, i_split = load_data(datadir)
 images = images[...,:3]
-val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
+# val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
+
 print(val)
 
 val_images = images[val]
 val_images = torch.from_numpy(val_images)
 val_images = val_images.permute([0,3,1,2])
 
-model = MyNet(3, num_slot = 12)
-model.load_state_dict(torch.load('./results/testing_8/model'))
+
+model_slot = 18
+model = MyNet(3, num_slot = model_slot)
+model.load_state_dict(torch.load(model_dir))
 
 scores = model(val_images)
 scores = scores.permute([0,2,3,1])
-scores = scores.reshape([-1, 12])
+scores = scores.reshape([-1, model_slot])
 
 mu = []
-for j in range(2):
+for j in range(len(slot_n)):
     slot = masks[j]
     slot = slot.reshape(-1)
     index = (slot>0.5)
@@ -58,9 +58,10 @@ for j in range(2):
 
 
 background_mask = torch.ones_like(masks[0])
-for j in range(2):
+for j in range(len(slot_n)):
     out_mask = 1.-masks[j]
     background_mask = out_mask * background_mask
+
 
 
 background_mask = background_mask.reshape(-1)
@@ -73,7 +74,7 @@ mu = torch.stack(mu)
 
 
 expand_out_mask_score = out_mask_score[:, None, :]
-expand_out_mask_score = expand_out_mask_score.expand([-1, 3, -1])
+expand_out_mask_score = expand_out_mask_score.expand([-1, mu.shape[0], -1])
 
 
 for _ in range(10):
@@ -82,33 +83,41 @@ for _ in range(10):
 
     z = k/(1e-6 + k.sum(dim=1, keepdim=True))
     update = torch.matmul(out_mask_score.T, z /(1e-6 + z.sum(dim = 0 , keepdim=True)))
-    mu[2] = update[:, 2]
+    mu[-1] = update[:, -1]
 
 
 final_score = torch.nn.functional.softmax(z, dim=1)
 
-
-
-
-slot1_mask = masks[1].clone()
+slot1_mask = masks[0].clone()
 slot1_mask_shape = slot1_mask.shape
 slot1_mask = slot1_mask.reshape(-1)
+slot1_mask[index] = final_score[:,0]
+# max_score,_ = torch.max(final_score, dim=1)
+# max_index = (final_score[:,1] + 1e-7>= max_score)
+# max_index = max_index.float()
+# new_score = final_score[:,1] * max_index
 
-max_score,_ = torch.max(final_score, dim=1)
-max_index = (final_score[:,1] + 1e-7>= max_score)
-max_index = max_index.float()
-new_score = final_score[:,1] * max_index
 
-slot1_mask[index] = new_score
+
+
+if use_nerf:
+    nerf_masks = []
+    for i in range(15):
+        mask_file = os.path.join(nerf_dir, 'acc1_slot{:d}.png'.format(i))
+        nerf_masks.append(imageio.imread(mask_file))
+    nerf_masks = np.stack(nerf_masks, 0)
+    nerf_masks = nerf_masks / 255.
 
 
 slot1_mask = slot1_mask.reshape(slot1_mask_shape)
 slot1_mask = slot1_mask.detach().cpu().numpy()
-slot1_mask = slot1_mask > 0.35
+slot1_mask = 0.5 * slot1_mask + 0.5 * nerf_masks
+slot1_mask = slot1_mask > 0.5
 masks = masks.detach().cpu().numpy()
 for i in range(15):
-    image_file = os.path.join(base_dir, 'refinement', 'slot{:d}.png'.format(i))
-    image_file1 = os.path.join(base_dir, 'refinement', 'origin{:d}.png'.format(i))
+    image_file = os.path.join(base_dir, 'refinement', 'mask{:d}_slot1.png'.format(i))
+    image_file1 = os.path.join(base_dir, 'refinement', 'outcome{:d}.png'.format(i))
     imageio.imwrite(image_file , to8b(slot1_mask[i]))
-    imageio.imwrite(image_file1 ,to8b(masks[1][i]))
+    imageio.imwrite(image_file1 ,to8b(images[val[i]] * slot1_mask[i][..., None]))
+
 

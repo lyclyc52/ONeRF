@@ -94,9 +94,10 @@ class SobelOperator(nn.Module):
 
 # def main():
 
-img_dir = './results/testing_2/segmentation'
-basedir = './results/testing_2/mask_refine'
-model_path = './results/testing_2/model'
+startdir = './results/testing_clevrtex_room'
+img_dir = os.path.join(startdir,'segmentation')
+basedir = os.path.join(startdir,'mask_refine')
+model_path = os.path.join(startdir,'model')
 
 
 os.makedirs(img_dir, exist_ok=True)
@@ -128,7 +129,7 @@ args = parser.parse_args()
 
 
 
-num_slot = 8
+num_slot = 18
 loss_fn = torch.nn.CrossEntropyLoss()
 
 

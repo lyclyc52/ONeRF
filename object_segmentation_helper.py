@@ -89,7 +89,7 @@ def KM_clustering(f, f_p, w, device):
     slots = slots.to(device)
     position = position.to(device)
 
-    for i in range(200):
+    for i in range(100):
         z=[]
         z_p=[]
         for j in range(num_slots):

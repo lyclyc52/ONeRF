@@ -73,15 +73,14 @@ class SobelOperator(nn.Module):
 
 os.environ["CUDA_VISIBLE_DEVICES"]='8'
 
-
-num_slots = 4
+base_dir = './results/testing_clevrtex_room'
+datadir = 'data/nerf_synthetic/clevrtex_room'
+num_slots = 6
 masks = []
 for i in range(15):
-    image_dir = 'results/testing_2/mask_refine/seg_input{:d}.png'.format(i)
-    image = imageio.imread(image_dir)
     image_mask = []
     for j in range(num_slots):
-        mask_dir= 'results/testing_2/segmentation/val_000200_r_{:d}_slot{:d}.png'.format(i,j)
+        mask_dir= image_dir = os.path.join(base_dir,'segmentation/val_000200_r_{:d}_slot{:d}.png'.format(i,j))
 
         im = imageio.imread(mask_dir)
 
@@ -89,14 +88,13 @@ for i in range(15):
         # dilation = dilation.astype(np.uint8)
 
         image_mask.append(erode)
-
-
-        imageio.imwrite('results/testing_2/remove_noise/r_{:d}_slot{:d}.png'.format(i,j), erode[...,None] * image)
+        image_dir = os.path.join(base_dir,'erode/val_000200_r_{:d}_slot{:d}.png'.format(i,j))
+        imageio.imwrite(image_dir,erode.astype(np.uint8)*255)
 
     masks.append(image_mask)
     # image_dir = 'results/testing_11/mask_refine/input{:d}.png'.format(i)
     # image = imageio.imread(image_dir)
-
+exit()
 input_size = 400
 
 
@@ -108,15 +106,15 @@ masks = np.transpose(masks, [0,2,3,1])
 
 device = torch.device("cuda:0" )
 
-datadir = 'data/nerf_synthetic/clevr_c_d4'
 images, poses, depth_maps, render_poses, hwf, i_split = load_data(
             datadir, True, 1, size = input_size)
 
 
 
-model_slot = 8
+model_slot = 18
 model = MyNet( 3, num_slot=model_slot )
-model.load_state_dict(torch.load('./results/testing_2/model'))
+model_dir = os.path.join(base_dir,'model')
+model.load_state_dict(torch.load(model_dir))
 model.to(device)
 
 images = images[...,:3]
@@ -129,7 +127,7 @@ images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_map
 
 # val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60] #for  clevrtex
 
-val = [0,1,2, 9,10,11,12,13,14,16,17,24,25,27,28]
+val = [8,9, 23, 24, 28,29, 31, 32, 37, 42, 43, 46, 48, 53,54]
 
 
 val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
@@ -142,40 +140,41 @@ val_images = val_images.permute([0,3,1,2])
 output = model( val_images )
 output = output.permute([0,2,3,1]).reshape( [-1, model_slot] )
 
-cur_m1 = masks[..., 0]
-cur_m1 = cur_m1.reshape(-1)
-class1 = output[cur_m1]
-print(class1.mean(dim=0))
-# print(torch.var(class1, dim=0))
+# cur_m1 = masks[..., 0]
+# cur_m1 = cur_m1.reshape(-1)
+# class1 = output[cur_m1]
+# print(class1.mean(dim=0))
+# # print(torch.var(class1, dim=0))
 
-cur_m2 = masks[..., 1]
-cur_m2 = cur_m2.reshape(-1)
-class2 = output[cur_m2]
-print(class2.mean(dim=0))
-# print(torch.var(class2, dim=0))
+# cur_m2 = masks[..., 1]
+# cur_m2 = cur_m2.reshape(-1)
+# class2 = output[cur_m2]
+# print(class2.mean(dim=0))
+# # print(torch.var(class2, dim=0))
 
+# cur_m3 = masks[..., 2]
+# cur_m3 = cur_m3.reshape(-1)
+# class3 = output[cur_m3]
+# print(class3.mean(dim=0))
+# # print(torch.var(class3, dim=0))
 
+# cur_m4 = masks[..., 3]
+# cur_m4 = cur_m4.reshape(-1)
+# class4 = output[cur_m4]
+# print(class4.mean(dim=0))
+# # print(torch.var(class4, dim=0))
+a = []
+for i in range(num_slots):
+    cur_m = masks[..., i]
+    cur_m = cur_m.reshape(-1)
+    cur_class = output[cur_m]
+    a.append(cur_class)
 
-cur_m3 = masks[..., 2]
-cur_m3 = cur_m3.reshape(-1)
-class3 = output[cur_m3]
-print(class3.mean(dim=0))
-# print(torch.var(class3, dim=0))
-
-
-cur_m4 = masks[..., 3]
-cur_m4 = cur_m4.reshape(-1)
-class4 = output[cur_m4]
-print(class4.mean(dim=0))
-# print(torch.var(class4, dim=0))
-
-
-a = [class1, class2, class3, class4]
 
 
 for i in range(5):
     t = []
-    for j in range(4):
+    for j in range(num_slots):
         size = a[j].shape[0]
         index = torch.randint(size, (size//10,))
         c_class = a[j]
@@ -184,6 +183,8 @@ for i in range(5):
     print(torch.norm(t[0]-t[1]))
     print(torch.norm(t[0]-t[2]))
     print(torch.norm(t[0]-t[3]))
+    print(torch.norm(t[0]-t[4]))
+    print(torch.norm(t[0]-t[5]))
     print('sample')
 exit()
 # f_extractor = Encoder_VGG(hwf, device=device)
