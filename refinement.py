@@ -5,23 +5,24 @@ from object_segmentation_helper import *
 
 
 
-
-base_dir = './results/testing_clevrtex_room'
-datadir = 'data/nerf_synthetic/clevrtex_room'
+# os.environ['CUDA_VISIBLE_DEVICES']='6,1'
+base_dir = '/data/yliugu/ONeRF/results/testing_clevrtex_animal2'
+datadir = '/data/yliugu/ONeRF/data/nerf_synthetic/clevrtex_animal2'
 image_dir = os.path.join(base_dir, 'segmentation')
 nerf_dir = os.path.join(base_dir, 'nerf_mask')
 model_dir = os.path.join(base_dir, 'model')
-use_nerf = False
-val = [8,9, 23, 24, 28,29, 31, 32, 37, 42, 43, 46, 48, 53,54]
+use_nerf = True
+object_index = 1
+val = [2,3,7,8,9,12, 15,16, 22,23,24, 27,28,31, 32,35, 37, 38, 40,43, 46,47, 48,51,52]
 
 
 
 masks = []
-slot_n = [0,1,5]
+slot_n = [0,2]
 for j in slot_n:
     slot = []
-    for i in range(15):
-        image_file = os.path.join(image_dir, 'val_000200_r_{:d}_slot{:d}.png'.format(i,j))
+    for i in range(len(val)):
+        image_file = os.path.join(image_dir, 'r_{:d}_slot{:d}.png'.format(i,j))
         slot.append(imageio.imread(image_file))
     slot = np.stack(slot, 0)
     masks.append(slot)
@@ -40,7 +41,7 @@ val_images = torch.from_numpy(val_images)
 val_images = val_images.permute([0,3,1,2])
 
 
-model_slot = 18
+model_slot = 8
 model = MyNet(3, num_slot = model_slot)
 model.load_state_dict(torch.load(model_dir))
 
@@ -88,10 +89,10 @@ for _ in range(10):
 
 final_score = torch.nn.functional.softmax(z, dim=1)
 
-slot1_mask = masks[0].clone()
+slot1_mask = masks[object_index].clone()
 slot1_mask_shape = slot1_mask.shape
 slot1_mask = slot1_mask.reshape(-1)
-slot1_mask[index] = final_score[:,0]
+slot1_mask[index] = final_score[:,object_index]
 # max_score,_ = torch.max(final_score, dim=1)
 # max_index = (final_score[:,1] + 1e-7>= max_score)
 # max_index = max_index.float()
@@ -102,8 +103,8 @@ slot1_mask[index] = final_score[:,0]
 
 if use_nerf:
     nerf_masks = []
-    for i in range(15):
-        mask_file = os.path.join(nerf_dir, 'acc1_slot{:d}.png'.format(i))
+    for i in range(len(val)):
+        mask_file = os.path.join(nerf_dir, 'acc_slot{:d}_r_{:d}.png'.format(object_index,i))
         nerf_masks.append(imageio.imread(mask_file))
     nerf_masks = np.stack(nerf_masks, 0)
     nerf_masks = nerf_masks / 255.
@@ -111,11 +112,12 @@ if use_nerf:
 
 slot1_mask = slot1_mask.reshape(slot1_mask_shape)
 slot1_mask = slot1_mask.detach().cpu().numpy()
-slot1_mask = 0.5 * slot1_mask + 0.5 * nerf_masks
+if use_nerf:
+    slot1_mask = slot1_mask + 0.55 * nerf_masks
 slot1_mask = slot1_mask > 0.5
 masks = masks.detach().cpu().numpy()
-for i in range(15):
-    image_file = os.path.join(base_dir, 'refinement', 'mask{:d}_slot1.png'.format(i))
+for i in range(len(val)):
+    image_file = os.path.join(base_dir, 'refinement', 'r_{:d}_slot{:d}.png'.format(i,object_index))
     image_file1 = os.path.join(base_dir, 'refinement', 'outcome{:d}.png'.format(i))
     imageio.imwrite(image_file , to8b(slot1_mask[i]))
     imageio.imwrite(image_file1 ,to8b(images[val[i]] * slot1_mask[i][..., None]))

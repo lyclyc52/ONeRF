@@ -1,6 +1,6 @@
 import os
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ["CUDA_VISIBLE_DEVICES"]='8'
+os.environ["CUDA_VISIBLE_DEVICES"]='5,6'
 from model_clustering import *
 from load_blender import *
 from run_nerf_helpers import *
@@ -94,12 +94,13 @@ class SobelOperator(nn.Module):
 
 # def main():
 
-startdir = './results/testing_clevrtex_room'
+startdir = '/data/yliugu/ONeRF/results/testing_clevrtex_animal2'
 img_dir = os.path.join(startdir,'segmentation')
 basedir = os.path.join(startdir,'mask_refine')
 model_path = os.path.join(startdir,'model')
-
-
+num_img = 25
+batch_size = 10
+num_slot = 15
 os.makedirs(img_dir, exist_ok=True)
 
 
@@ -129,7 +130,7 @@ args = parser.parse_args()
 
 
 
-num_slot = 18
+
 loss_fn = torch.nn.CrossEntropyLoss()
 
 
@@ -142,12 +143,10 @@ device = torch.device("cuda:0" )
 
 model = MyNet( 3, num_slot=num_slot )
 model.to(device)
-
-
-
+model.load_state_dict(torch.load(model_path))
 
 imgs = []
-for i in range(15):
+for i in range(num_img):
     fname = os.path.join(basedir, 'seg_input{:d}.png'.format(i))
     imgs.append(imageio.imread(fname))
 
@@ -156,17 +155,13 @@ for i in range(15):
 
 
 imgs = (np.array(imgs) / 255.).astype(np.float32) 
-
 imgs= imgs[...,:3]
 imgs = torch.from_numpy(imgs)
-
-
-
 imgs = imgs.to(device)
 
 
 
-B,H,W = imgs.shape[0], imgs.shape[1], imgs.shape[2]
+B,H,W = batch_size, imgs.shape[1], imgs.shape[2]
 
 optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
 label_colours = np.random.randint(255,size=(num_slot,3))
@@ -175,6 +170,39 @@ HPy_target = torch.zeros(B, H-1, W, num_slot)
 HPz_target = torch.zeros(B, H, W-1, num_slot)
 HPy_target = HPy_target.to(device)
 HPz_target = HPz_target.to(device)
+
+
+f = imgs.permute([0,3,1,2])
+for i in range(num_img//5):
+    test = f[i*5:i*5+5]
+    B = test.shape[0]
+    output = model( test )
+
+    output = output.permute([0,2,3,1]).reshape( [-1, num_slot] )
+
+
+    ignore, target = torch.max( output, 1 )
+
+    im_target = target.data.cpu().numpy()
+    im_target = im_target.reshape([B,H,W])
+    # im_target_rgb = np.array([label_colours[ c ] for c in im_target])
+    # im_target_rgb = im_target_rgb.reshape( [B,H,W,3] ).astype( np.uint8 )
+
+    cluster = np.unique(im_target)
+
+
+    for c in range(cluster.shape[0]):
+        for b in range(B):
+            mask = (im_target[b] == cluster[c])
+            mask = mask.astype(int)
+            mask = mask * 255
+            mask = mask[..., None]
+            mask = mask.astype(np.uint8)
+            imageio.imwrite(os.path.join(img_dir, 'r_{:1d}_slot{:01d}.png'.format(b+i*5,c)), mask)
+        
+
+exit()
+
 
 
 
@@ -191,6 +219,8 @@ for i in range(501):
 
     # f = val_images.permute([0,3,1,2])
     f = imgs.permute([0,3,1,2])
+    testing = np.random.randint(0, num_img, batch_size)
+    f = f[testing]
     output = model( f )
 
     output = output.permute([0,2,3,1]).reshape( [-1, num_slot] )
@@ -242,6 +272,7 @@ for i in range(501):
 
         torch.save(model.state_dict(), model_path)
 
-            
+
+
 
 

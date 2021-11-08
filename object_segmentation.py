@@ -1,10 +1,10 @@
 from object_segmentation_helper import *
-os.environ['CUDA_VISIBLE_DEVICES'] = '6'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
 
-base_dir = './results/testing_clevrtex_room'
+base_dir = '/data/yliugu/ONeRF/results/testing_clevrtex_animal2'
 
 
-datadir = 'data/nerf_synthetic/clevrtex_room'
+datadir = '/data/yliugu/ONeRF/data/nerf_synthetic/clevrtex_animal2'
 
 
 input_size = 400
@@ -39,8 +39,8 @@ device = torch.device("cuda:0" )
 
 
 
-val = [7,8,9, 15,16, 22,23, 31, 32, 37, 38, 46,47, 48, 53] #for  clevrtex
-
+val = [2,3,7,8,9,12, 15,16, 22,23,24, 27,28,31, 32,35, 37, 38, 40,43, 46,47, 48,51,52] #for  clevrtex
+# val = [8,9,26,27,31,32,33,34,38,39,40,45,46,47,52,53,57,58,59,60]
 # val = [ 4, 5, 6, 23, 24, 30, 33, 40, 41, 42, 43, 45, 46, 48, 58] #for  clevrtex
 # val = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 # val = [0,1,2, 9,10,11,12,13,14,16,17,24,25,27,28]
@@ -84,7 +84,7 @@ with torch.no_grad():
     f_p = f[...,C-3:]
     f = f[...,:C-3]
 
-    w = 2.
+    w = 10.
 
     attn_logits = KM_clustering(f, f_p, w, device)
     attn = attn_logits.softmax(dim=-1)

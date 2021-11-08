@@ -71,32 +71,32 @@ class SobelOperator(nn.Module):
         return x
 
 
-os.environ["CUDA_VISIBLE_DEVICES"]='8'
+os.environ["CUDA_VISIBLE_DEVICES"]='5'
 
-base_dir = './results/testing_clevrtex_room'
-datadir = 'data/nerf_synthetic/clevrtex_room'
-num_slots = 6
+base_dir = '/data/yliugu/ONeRF/results/testing_clevrtex_animal2'
+datadir = '/data/yliugu/ONeRF/data/nerf_synthetic/clevrtex_animal2'
+num_slots = 5
 masks = []
-for i in range(15):
+for i in range(25):
     image_mask = []
     for j in range(num_slots):
-        mask_dir= image_dir = os.path.join(base_dir,'segmentation/val_000200_r_{:d}_slot{:d}.png'.format(i,j))
+        mask_dir= image_dir = os.path.join(base_dir,'segmentation/r_{:d}_slot{:d}.png'.format(i,j))
 
         im = imageio.imread(mask_dir)
 
-        erode = ndimage.binary_erosion(im, iterations=1)
+        erode = ndimage.binary_erosion(im, iterations=2)
         # dilation = dilation.astype(np.uint8)
 
         image_mask.append(erode)
-        image_dir = os.path.join(base_dir,'erode/val_000200_r_{:d}_slot{:d}.png'.format(i,j))
+        image_dir = os.path.join(base_dir,'erode/r_{:d}_slot{:d}.png'.format(i,j))
         imageio.imwrite(image_dir,erode.astype(np.uint8)*255)
 
     masks.append(image_mask)
     # image_dir = 'results/testing_11/mask_refine/input{:d}.png'.format(i)
     # image = imageio.imread(image_dir)
-exit()
-input_size = 400
 
+input_size = 400
+exit()
 
 
 masks = np.array(masks)
@@ -111,7 +111,7 @@ images, poses, depth_maps, render_poses, hwf, i_split = load_data(
 
 
 
-model_slot = 18
+model_slot = 15
 model = MyNet( 3, num_slot=model_slot )
 model_dir = os.path.join(base_dir,'model')
 model.load_state_dict(torch.load(model_dir))
@@ -125,9 +125,9 @@ images, depth_maps, poses = torch.from_numpy(images), torch.from_numpy(depth_map
 
 # val = [0, 2, 3, 5, 22, 23, 24, 25, 39, 40, 41, 42, 43, 45, 46, 48] #for simple clevr
 
-# val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60] #for  clevrtex
+val = [0, 3, 4, 23, 24, 40, 41, 42, 43, 45, 46, 48, 58, 59, 60] #for  clevrtex
 
-val = [8,9, 23, 24, 28,29, 31, 32, 37, 42, 43, 46, 48, 53,54]
+# val = [2,3,7,8,9,12, 15,16, 22,23,24, 27,28,31, 32,35, 37, 38, 40,43, 46,47, 48,51,52]
 
 
 val_images, val_depths, val_poses = images[val], depth_maps[val], poses[val]
@@ -176,10 +176,12 @@ for i in range(5):
     t = []
     for j in range(num_slots):
         size = a[j].shape[0]
+        print(size)
         index = torch.randint(size, (size//10,))
         c_class = a[j]
         c_class =c_class[index]
         t.append(c_class.mean(dim=0))
+    exit()
     print(torch.norm(t[0]-t[1]))
     print(torch.norm(t[0]-t[2]))
     print(torch.norm(t[0]-t[3]))
